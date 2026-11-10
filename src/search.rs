@@ -1,0 +1,241 @@
+//! Поиск по библиотеке: совпадения в названии, описании и адресе,
+//! опечатки, пропущенные буквы и запрос, набранный не в той раскладке («пшерги» → «github»).
+
+/// Нижний регистр, «ё» = «е».
+fn norm_char(c: char) -> char {
+    let l = c.to_lowercase().next().unwrap_or(c);
+    if l == 'ё' { 'е' } else { l }
+}
+
+fn norm(s: &str) -> Vec<char> {
+    s.chars().map(norm_char).collect()
+}
+
+const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
+const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюё";
+
+/// Тот же запрос в другой раскладке, если в нём есть что менять.
+pub fn swap_layout(s: &str) -> Option<String> {
+    let en: Vec<char> = EN.chars().collect();
+    let ru: Vec<char> = RU.chars().collect();
+    let mut changed = false;
+    let out: String = s
+        .chars()
+        .map(|c| {
+            let l = c.to_lowercase().next().unwrap_or(c);
+            if let Some(i) = en.iter().position(|&e| e == l) {
+                changed = true;
+                ru[i]
+            } else if let Some(i) = ru.iter().position(|&r| r == l) {
+                changed = true;
+                en[i]
+            } else {
+                l
+            }
+        })
+        .collect();
+    changed.then_some(out)
+}
+
+pub struct Query {
+    /// Для каждого слова запроса: варианты (как набрано, в другой раскладке).
+    tokens: Vec<Vec<Vec<char>>>,
+}
+
+impl Query {
+    pub fn new(q: &str) -> Self {
+        let tokens = q
+            .split_whitespace()
+            .map(|t| {
+                let mut v = vec![norm(t)];
+                if let Some(s) = swap_layout(t) {
+                    let s = norm(&s);
+                    if s != v[0] {
+                        v.push(s);
+                    }
+                }
+                v
+            })
+            .collect();
+        Self { tokens }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
+
+    /// Оценка совпадения или `None`, если хотя бы одно слово запроса нигде не нашлось.
+    pub fn score(&self, title: &str, desc: &str, url: &str) -> Option<i32> {
+        let fields = [(norm(title), 100.0), (norm(url), 70.0), (norm(desc), 55.0)];
+        let mut total = 0;
+        for variants in &self.tokens {
+            let mut best = 0f32;
+            for (k, t) in variants.iter().enumerate() {
+                let penalty = if k == 0 { 1.0 } else { 0.9 };
+                for (hay, w) in &fields {
+                    best = best.max(token_score(hay, t, *w) * penalty);
+                }
+            }
+            if best <= 0.0 {
+                return None;
+            }
+            total += best.round() as i32;
+        }
+        Some(total)
+    }
+
+    /// Байтовые диапазоны точных совпадений в `text` — для подсветки.
+    pub fn highlights(&self, text: &str) -> Vec<(usize, usize)> {
+        let chars: Vec<(usize, char)> = text.char_indices().map(|(i, c)| (i, norm_char(c))).collect();
+        let hay: Vec<char> = chars.iter().map(|c| c.1).collect();
+        let mut ranges = Vec::new();
+        for variants in &self.tokens {
+            for t in variants {
+                if t.is_empty() || t.len() > hay.len() {
+                    continue;
+                }
+                let mut from = 0;
+                while let Some(p) = find(&hay[from..], t) {
+                    let s = from + p;
+                    let e = s + t.len();
+                    let end_byte = if e < chars.len() { chars[e].0 } else { text.len() };
+                    ranges.push((chars[s].0, end_byte));
+                    from = e;
+                }
+            }
+        }
+        ranges.sort();
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        for r in ranges {
+            match merged.last_mut() {
+                Some(last) if r.0 <= last.1 => last.1 = last.1.max(r.1),
+                _ => merged.push(r),
+            }
+        }
+        merged
+    }
+}
+
+fn token_score(hay: &[char], t: &[char], w: f32) -> f32 {
+    if t.is_empty() || hay.is_empty() {
+        return 0.0;
+    }
+    if let Some(pos) = find(hay, t) {
+        let word_start = pos == 0 || !hay[pos - 1].is_alphanumeric();
+        return w + if word_start { 15.0 } else { 0.0 };
+    }
+    if t.len() >= 3 {
+        let allowed = if t.len() <= 5 { 1 } else { 2 };
+        for word in hay.split(|c| !c.is_alphanumeric()).filter(|w| w.len() >= 2) {
+            let prefix = &word[..word.len().min(t.len())];
+            if levenshtein(t, word) <= allowed || (word.len() > t.len() && levenshtein(t, prefix) <= allowed) {
+                return w * 0.45;
+            }
+        }
+        if let Some(s) = subsequence(hay, t) {
+            return w * 0.25 * s;
+        }
+    }
+    0.0
+}
+
+fn find(hay: &[char], needle: &[char]) -> Option<usize> {
+    if needle.len() > hay.len() {
+        return None;
+    }
+    (0..=hay.len() - needle.len()).find(|&i| hay[i..i + needle.len()] == *needle)
+}
+
+/// Буквы запроса встречаются по порядку и недалеко друг от друга: «gthb» в «github».
+/// Возвращает 0.5…1.0 — чем плотнее, тем больше.
+fn subsequence(hay: &[char], t: &[char]) -> Option<f32> {
+    let mut best: Option<usize> = None;
+    for start in 0..hay.len() {
+        if hay[start] != t[0] {
+            continue;
+        }
+        let mut j = 1;
+        let mut i = start + 1;
+        while j < t.len() && i < hay.len() {
+            if hay[i] == t[j] {
+                j += 1;
+            }
+            i += 1;
+        }
+        if j == t.len() {
+            let span = i - start;
+            best = Some(best.map_or(span, |b| b.min(span)));
+        }
+    }
+    let span = best?;
+    if span > t.len() * 2 + 1 {
+        return None;
+    }
+    Some(1.0 - 0.5 * (span - t.len()) as f32 / (t.len() + 1) as f32)
+}
+
+fn levenshtein(a: &[char], b: &[char]) -> usize {
+    if a.len().abs_diff(b.len()) > 2 {
+        return 3;
+    }
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0; b.len() + 1];
+    for i in 1..=a.len() {
+        cur[0] = i;
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s(q: &str, title: &str, desc: &str, url: &str) -> Option<i32> {
+        Query::new(q).score(title, desc, url)
+    }
+
+    #[test]
+    fn exact_and_fields() {
+        assert!(s("egui", "egui — GUI на Rust", "", "github.com/emilk/egui").is_some());
+        assert!(s("гуи", "", "Простой ГУИ", "example.com").is_some());
+        assert!(s("emilk", "x", "", "github.com/emilk/egui").is_some());
+        assert!(s("нет", "x", "y", "z.com").is_none());
+        // Совпадение в названии важнее, чем в адресе.
+        assert!(s("rust", "Rust book", "", "a.com").unwrap() > s("rust", "Book", "", "rust.org").unwrap());
+    }
+
+    #[test]
+    fn all_words_must_match() {
+        assert!(s("rust book", "The Rust book", "", "x.org").is_some());
+        assert!(s("rust python", "The Rust book", "", "x.org").is_none());
+    }
+
+    #[test]
+    fn yo_and_case() {
+        assert!(s("ЕЛКА", "Ёлка новогодняя", "", "").is_some());
+    }
+
+    #[test]
+    fn typos_and_layout() {
+        assert!(s("githab", "GitHub", "", "github.com").is_some());
+        assert!(s("пшерги", "GitHub", "", "github.com").is_some());
+        assert!(s("ghbdtn", "Привет мир", "", "").is_some());
+        assert!(s("gthb", "", "", "github.com").is_some());
+        assert!(s("прогрмма", "Полезная программа", "", "").is_some());
+    }
+
+    #[test]
+    fn highlight_ranges() {
+        let q = Query::new("hub");
+        assert_eq!(q.highlights("GitHub hub"), vec![(3, 6), (7, 10)]);
+        let q = Query::new("ёлк");
+        let t = "Ёлка";
+        let h = q.highlights(t);
+        assert_eq!(&t[h[0].0..h[0].1], "Ёлк");
+    }
+}

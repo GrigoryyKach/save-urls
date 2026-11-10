@@ -1,0 +1,39 @@
+[package]
+name = "save_urls"
+version = "1.0.0"
+edition = "2024"
+description = "Save URLs — библиотека ссылок в трее"
+build = "build.rs"
+
+[[bin]]
+name = "SaveUrls"
+path = "src/main.rs"
+
+[dependencies]
+dirs = "7.0.0"
+eframe = { version = "0.37.0", default-features = false, features = ["default_fonts", "glow"] }
+rfd = "0.15.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+raw-window-handle = "0.6.2"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Networking_WinHttp",
+    "Win32_Security",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 3
+strip = true
+lto = true
