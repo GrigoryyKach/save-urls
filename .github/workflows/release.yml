@@ -1,7 +1,7 @@
 name: Release
 
-# Собирает Windows-сборку и публикует GitHub Release при пуше тега vX.Y.Z.
-# Лаунчер NIMVORO скачивает из релиза архив SaveUrls-win-x64.zip (имя задано в nimvoro.json).
+# Builds the Windows binary and publishes a GitHub Release when a vX.Y.Z tag is pushed.
+# The NIMVORO launcher downloads SaveUrls-win-x64.zip from the release (name set in nimvoro.json).
 on:
   push:
     tags: ["v*"]
@@ -16,33 +16,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Версия совпадает с тегом
+      - name: Version matches the tag
         shell: pwsh
         run: |
           $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
           "VERSION=$v" >> $env:GITHUB_ENV
           if ("${{ github.ref_type }}" -eq "tag" -and "${{ github.ref_name }}" -ne "v$v") {
-            throw "Тег ${{ github.ref_name }} не совпадает с версией $v"
+            throw "Tag ${{ github.ref_name }} does not match version $v"
           }
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Тесты
+      - name: Tests
         run: cargo test --release
 
-      - name: Сборка
+      - name: Build
         run: cargo build --release
 
-      - name: Архив
+      - name: Package
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force pkg | Out-Null
           Copy-Item target/release/SaveUrls.exe pkg/
           Compress-Archive -Path pkg/* -DestinationPath SaveUrls-win-x64.zip -Force
 
-      - name: Публикация релиза
+      - name: Publish release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

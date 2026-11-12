@@ -1,97 +1,111 @@
 # Save URLs
 
-Библиотека ссылок для Windows, которая живёт в трее. Скопировали адрес интересного сайта, щёлкнули значок в трее — ссылка сохранена,
-а её название программа сама возьмёт со страницы. В окне можно разложить ссылки по папкам, подписать, добавить описание и быстро найти.
+A link library for Windows that lives in the tray. Copy the address of an interesting site, click the tray icon, and the link is saved;
+the app takes its title from the page itself. In the window you can sort links into folders, describe them and find them quickly.
 
-Написано на Rust (eframe/egui), один exe без зависимостей, библиотека хранится только у вас на компьютере.
-Оформление то же, что у Random Wheel и Smart Switcher: общий `src/theme.rs` (скопирован из `../random_wheel` без изменений),
-фирменный градиент `#4f6bff → #8a5bff`, Segoe UI, карточки, заголовки секций капсом. Тема — по системной.
+Written in Rust (eframe/egui): a single exe with no dependencies, and the library is stored only on your computer.
+The look matches Random Wheel and Smart Switcher: the shared `src/theme.rs` (copied from `../random_wheel` unchanged),
+the brand gradient `#4f6bff → #8a5bff`, Segoe UI, cards and capitalised section headings.
 
-## Запуск
+## Languages
+
+The interface is available in English (default), Russian and Ukrainian. Pick the language in Settings → Appearance; it applies immediately,
+including the tray menu, tooltip and notifications.
+The starting language is taken from the `language` setting in `library.json`, then from the `.nimvoro.json` marker next to the exe (written by the NIMVORO launcher),
+and falls back to English. The result is saved to the library settings.
+
+## Theme
+
+Settings → Appearance → Theme: System (default, follows Windows live), Light or Dark.
+
+## Run
 
 ```bash
 cargo run --release
 ```
 
-Готовый exe: `target/release/SaveUrls.exe`, его можно скопировать куда угодно.
-Ключ `--background` запускает программу сразу в трей без окна (так она стартует при автозапуске).
+The ready exe is `target/release/SaveUrls.exe`; you can copy it anywhere.
+The `--background` flag starts the program straight into the tray without a window (this is how it starts with Windows).
 
-## Как сохранять ссылки
+## How to save links
 
-- **Щелчок по значку в трее** — сохранить ссылку из буфера обмена. Если ссылки в буфере нет, откроется окно.
-  В настройках щелчок можно переключить на «Открыть библиотеку».
-- **Ctrl+Alt+S** в любой программе — то же самое (отключается в настройках).
-- **Правая кнопка по значку** — меню: сохранить (с адресом из буфера), открыть библиотеку, 8 недавних ссылок, выход.
-- **В окне**: Ctrl+V, кнопка «Добавить ссылку» или плашка «В буфере обмена: …» над списком.
+- **Click the tray icon** to save the link from the clipboard. If there is no link in the clipboard, the window opens.
+  In Settings the click can be switched to "Open library".
+- **Ctrl+Alt+S** in any program does the same (can be turned off in Settings).
+- **Right-click the icon** for a menu: save (with the address from the clipboard), open the library, 8 recent links, quit.
+- **In the window**: Ctrl+V, the "Add link" button, or the "In the clipboard: ..." bar above the list.
 
-После сохранения из трея появляется уведомление Windows; щелчок по нему открывает ссылку, чтобы дописать описание или выбрать папку.
-Повторно та же ссылка не сохраняется (сравнение без `https://`, `www.` и завершающего `/`).
+After saving from the tray, a Windows notification appears; clicking it opens the link so you can add a description or pick a folder.
+The same link is not saved twice (compared without `https://`, `www.` and a trailing `/`).
 
-Ссылка ищется в любом скопированном тексте: «смотри: https://…», `www.site.ru`, просто `github.com/user/repo` или `t.me/channel`.
+The link is found in any copied text: "look: https://...", `www.site.com`, or just `github.com/user/repo` or `t.me/channel`.
 
-## Что умеет окно
+## What the window does
 
-- **Папки** со своими названиями: «+» в боковой панели, двойной щелчок — переименовать, правая кнопка — переименовать,
-  поменять порядок, сделать папкой по умолчанию или удалить (ссылки при этом не удаляются, а уходят в «Без папки»).
-- **Перетаскивание**: карточку ссылки можно перетащить мышью на папку.
-- **Ссылка**: название, необязательное описание, папка. Щелчок по карточке открывает ссылку в браузере,
-  при наведении — кнопки «открыть», «копировать», «изменить», «удалить», правая кнопка — то же плюс «Переместить в…».
-  Удаление можно отменить кнопкой «Вернуть».
-- **Сортировка**: сначала новые / старые, по названию А→Я и Я→А, по сайту.
-- **Поиск** по названию, описанию и адресу одновременно, с подсветкой совпадений. Понимает опечатки («githab»),
-  пропущенные буквы («gthb»), «ё» как «е» и запрос в неправильной раскладке («пшерги» найдёт GitHub). Esc очищает поиск.
-- **Название со страницы**: после сохранения программа загружает страницу и берёт `<title>` (или `og:title`).
-  Если вы переименовали ссылку сами, ваше название не перезаписывается. Отключается в настройках.
-- **Экспорт закладок** в HTML — этот файл импортируют Chrome, Firefox и Edge.
-- **Автозапуск** вместе с Windows (ключ в `HKCU\...\Run`, включается в настройках).
+- **Folders** with your own names: "+" in the sidebar, double-click to rename, right-click to rename,
+  reorder, make a folder the default or delete it (links are not deleted, they move to "No folder").
+- **Drag and drop**: drag a link card onto a folder.
+- **Link**: a title, an optional description and a folder. Clicking the card opens the link in the browser;
+  on hover there are "open", "copy", "edit" and "delete" buttons, and the right-click menu offers the same plus "Move to...".
+  Deleting can be undone with the "Undo" button.
+- **Sorting**: newest or oldest first, by title A→Z and Z→A, by website.
+- **Search** over the title, description and address at once, with the matches highlighted. It forgives typos ("githab"),
+  skipped letters ("gthb"), treats "ё" as "е", and understands a query typed in the wrong layout ("пшерги" finds GitHub). Esc clears the search.
+- **Title from the page**: after saving, the program downloads the page and takes `<title>` (or `og:title`).
+  If you renamed the link yourself, your title is never overwritten. Can be turned off in Settings.
+- **Bookmark export** to HTML, which Chrome, Firefox and Edge can import.
+- **Autostart** with Windows (a key in `HKCU\...\Run`, enabled in Settings).
 
-Закрытие окна крестиком прячет его в трей. Полностью выйти — «Выход» в меню значка или кнопка в настройках.
-Повторный запуск exe не создаёт второй экземпляр, а показывает окно уже работающей программы.
+Closing the window with the cross hides it in the tray. To quit completely, use "Quit" in the icon menu or the button in Settings.
+Starting the exe again does not create a second instance; it shows the window of the running program.
 
-Горячие клавиши в окне: Ctrl+V — сохранить ссылку из буфера, Ctrl+N — новая ссылка, Ctrl+F — поиск.
+Window shortcuts: Ctrl+V saves the link from the clipboard, Ctrl+N adds a link, Ctrl+F searches.
 
-## Где хранится библиотека
+## Where the library is stored
 
-`%APPDATA%\Save URLs\library.json` — ссылки, папки и настройки. Запись атомарная (через временный файл),
-раз за запуск предыдущая версия копируется в `library.bak.json`. Если файл окажется повреждён, программа не затрёт его,
-а отложит как `library.broken-<время>.json` и сообщит об этом.
+`%APPDATA%\Save URLs\library.json`: links, folders and settings (including language and theme). Writes are atomic (through a temporary file),
+and once per run the previous version is copied to `library.bak.json`. If the file turns out to be damaged, the program does not overwrite it
+but sets it aside as `library.broken-<time>.json` and says so.
 
-**Портативный режим**: если рядом с exe лежит `library.json`, программа работает с ним (удобно для флешки).
+**Portable mode**: if `library.json` lies next to the exe, the program works with it (handy for a USB stick).
+A portable copy has its own single-instance guard, so it can run next to an installed copy.
 
-В сеть программа ходит только за названием сохранённой страницы (через системный WinHTTP, с учётом прокси Windows).
+The program goes online only for the title of a saved page (through the system WinHTTP, honouring the Windows proxy).
 
-## Устройство
+## Layout
 
 ```
-src/main.rs    запуск, один экземпляр, окно
-src/app.rs     интерфейс: боковая панель с папками, список, поиск, редактор ссылки, настройки, уведомления
-src/kit.rs     компоненты поверх theme.rs: значки, строки навигации, меню, поля ввода, выпадающие списки
-src/theme.rs   общий модуль оформления (как в Random Wheel)
-src/win.rs     Windows: значок в трее в своём потоке, буфер обмена, горячая клавиша, уведомления, автозапуск, WinHTTP
-src/store.rs   модель данных и library.json
-src/search.rs  поиск: оценка совпадений, опечатки, раскладка, подсветка
-src/urlx.rs    поиск ссылки в тексте, домен, разбор заголовка из HTML
-src/icon.rs    иконка, нарисованная кодом (окно, трей и .ico внутри exe)
-build.rs       вшивает иконку и сведения о версии в exe (windres для GNU-тулчейна, rc.exe для MSVC)
+src/main.rs     start-up, single instance, window, icon (loaded from assets/icon.png)
+src/app.rs      UI: sidebar with folders, list, search, link editor, settings, notices
+src/strings.rs  interface strings (English, Russian, Ukrainian) and the current language
+src/kit.rs      components on top of theme.rs: icons, navigation rows, menus, input fields, dropdowns
+src/theme.rs    shared: light/dark palette, theme mode, widgets
+src/i18n.rs     shared: language, string tables, plurals, language/theme rows
+src/nimvoro.rs  shared: update check and hand-off to the launcher
+src/win.rs      Windows: tray icon in its own thread, clipboard, hotkey, notifications, autostart, WinHTTP
+src/store.rs    data model and library.json
+src/search.rs   search: match scoring, typos, layout, highlighting
+src/urlx.rs     finding a link in text, the domain, parsing the title from HTML
+build.rs        embeds assets/icon.ico and version info into the exe (windres for the GNU toolchain, rc.exe for MSVC)
 ```
 
-`theme.rs` и `kit.rs` не зависят от остального кода — их можно взять общими модулями для будущего лаунчера.
+`theme.rs`, `i18n.rs` and `nimvoro.rs` are shared modules, copied byte for byte into the other Rust tools of the suite. Their API is described in the file headers.
 
-## Тесты
+## Tests
 
 ```bash
 cargo test
 ```
 
-Тест загрузки заголовков ходит в интернет, поэтому запускается отдельно: `cargo test -- --ignored`.
+The title download test goes online, so it runs separately: `cargo test -- --ignored`.
 
-Для ручной проверки в debug-сборке есть переменная `SAVE_URLS_DEBUG`, например
-`SAVE_URLS_DEBUG="q:пшерги"`, `"page:settings"`, `"edit:10"`, `"folder:1"`, `"theme:light"`.
+For manual checks of a debug build there is the `SAVE_URLS_DEBUG` variable, for example
+`SAVE_URLS_DEBUG="q:githab"`, `"page:settings"`, `"edit:10"`, `"folder:1"`, `"theme:light"`, `"lang:ru"`.
 
-## Обновления и NIMVORO
+## Updates and NIMVORO
 
-Утилита входит в набор [NIMVORO](https://github.com/GrigoryyKach/nimvoro): лаунчер ставит её в один клик и обновляет.
-При запуске программа проверяет последний [релиз](https://github.com/GrigoryyKach/save-urls/releases/latest) (переключатель «Проверять обновления при запуске» в настройках, раздел «Система»).
-Если есть новая версия, кнопка «Обновить» передаёт обновление лаунчеру, а без лаунчера открывает страницу релиза.
+The tool is part of the [NIMVORO](https://github.com/GrigoryyKach/nimvoro) suite: the launcher installs it in one click and keeps it updated.
+At start-up the program checks the latest [release](https://github.com/GrigoryyKach/save-urls/releases/latest) (the "Check on startup" switch in Settings, "System" section).
+If a new version exists, the "Update" button hands the update to the launcher, and without the launcher it opens the release page.
 
-Релиз собирается GitHub Actions при пуше тега: поднимите версию в `Cargo.toml`, затем `git tag v{версия} && git push --tags`.
+The release is built by GitHub Actions when a tag is pushed: bump the version in `Cargo.toml`, then `git tag v{version} && git push --tags`.

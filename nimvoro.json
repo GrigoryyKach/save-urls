@@ -2,31 +2,31 @@
   "schema": 1,
   "id": "save-urls",
   "name": "Save URLs",
-  "tagline": "Библиотека ссылок в трее",
-  "description": "Скопировали адрес — щёлкнули значок в трее, и ссылка сохранена вместе с названием страницы. Ссылки раскладываются по папкам, подписываются и быстро находятся поиском, который понимает опечатки и неправильную раскладку.",
+  "tagline": "A link library that lives in the tray",
+  "description": "Copy an address, click the tray icon, and the link is saved together with the page title. Links are sorted into folders, described and found fast with a search that forgives typos and a wrong keyboard layout.",
   "features": [
     {
-      "title": "Сохранение в один щелчок",
-      "text": "Значок в трее или Ctrl+Alt+S сохраняют ссылку из буфера обмена в любой программе."
+      "title": "One-click saving",
+      "text": "The tray icon or Ctrl+Alt+S saves the link from the clipboard in any program."
     },
     {
-      "title": "Название со страницы",
-      "text": "Программа сама подтягивает <title> или og:title сохранённой страницы."
+      "title": "Title from the page",
+      "text": "The app fetches the <title> or og:title of the saved page on its own."
     },
     {
-      "title": "Папки и перетаскивание",
-      "text": "Свои папки, порядок, папка по умолчанию; карточки перетаскиваются мышью."
+      "title": "Folders and drag and drop",
+      "text": "Your own folders, their order and a default folder; cards can be dragged onto folders."
     },
     {
-      "title": "Умный поиск",
-      "text": "Находит с опечатками, пропущенными буквами и в неправильной раскладке («пшерги» → GitHub)."
+      "title": "Smart search",
+      "text": "Finds links despite typos, skipped letters and a wrong keyboard layout (\"githab\" finds GitHub)."
     },
     {
-      "title": "Экспорт закладок",
-      "text": "HTML-файл закладок для Chrome, Firefox и Edge. Портативный режим для флешки."
+      "title": "Bookmark export",
+      "text": "An HTML bookmarks file for Chrome, Firefox and Edge. Portable mode for a USB stick."
     }
   ],
-  "category": "Продуктивность",
+  "category": "Productivity",
   "accent": [
     "#4f6bff",
     "#8a5bff"
@@ -42,5 +42,67 @@
   "requirements": [
     "Windows 10/11 x64"
   ],
-  "settingsDir": "%APPDATA%\\Save URLs"
+  "settingsDir": "%APPDATA%\\Save URLs",
+  "i18n": {
+    "ru": {
+      "tagline": "Библиотека ссылок в трее",
+      "description": "Скопировали адрес — щёлкнули значок в трее, и ссылка сохранена вместе с названием страницы. Ссылки раскладываются по папкам, подписываются и быстро находятся поиском, который понимает опечатки и неправильную раскладку.",
+      "category": "Продуктивность",
+      "features": [
+        {
+          "title": "Сохранение в один щелчок",
+          "text": "Значок в трее или Ctrl+Alt+S сохраняют ссылку из буфера обмена в любой программе."
+        },
+        {
+          "title": "Название со страницы",
+          "text": "Программа сама подтягивает <title> или og:title сохранённой страницы."
+        },
+        {
+          "title": "Папки и перетаскивание",
+          "text": "Свои папки, порядок, папка по умолчанию; карточки перетаскиваются мышью."
+        },
+        {
+          "title": "Умный поиск",
+          "text": "Находит с опечатками, пропущенными буквами и в неправильной раскладке («пшерги» → GitHub)."
+        },
+        {
+          "title": "Экспорт закладок",
+          "text": "HTML-файл закладок для Chrome, Firefox и Edge. Портативный режим для флешки."
+        }
+      ],
+      "requirements": [
+        "Windows 10/11 x64"
+      ]
+    },
+    "uk": {
+      "tagline": "Бібліотека посилань у треї",
+      "description": "Скопіювали адресу — клацнули значок у треї, і посилання збережено разом із назвою сторінки. Посилання розкладаються по теках, підписуються й швидко знаходяться пошуком, який розуміє помилки в написанні та неправильну розкладку.",
+      "category": "Продуктивність",
+      "features": [
+        {
+          "title": "Збереження одним клацанням",
+          "text": "Значок у треї або Ctrl+Alt+S зберігають посилання з буфера обміну в будь-якій програмі."
+        },
+        {
+          "title": "Назва зі сторінки",
+          "text": "Програма сама підтягує <title> або og:title збереженої сторінки."
+        },
+        {
+          "title": "Теки та перетягування",
+          "text": "Власні теки, їхній порядок, тека за замовчуванням; картки перетягуються мишею."
+        },
+        {
+          "title": "Розумний пошук",
+          "text": "Знаходить попри помилки, пропущені літери та неправильну розкладку («пшерги» → GitHub)."
+        },
+        {
+          "title": "Експорт закладок",
+          "text": "HTML-файл закладок для Chrome, Firefox і Edge. Портативний режим для флешки."
+        }
+      ],
+      "requirements": [
+        "Windows 10/11 x64"
+      ]
+    }
+  }
 }

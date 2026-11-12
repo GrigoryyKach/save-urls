@@ -9,10 +9,12 @@ use eframe::egui::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+use crate::i18n;
 use crate::kit::{self, IconFn};
-use crate::nimvoro::{UpdateState, Updater};
+use crate::nimvoro::{self, UpdateState, Updater};
 use crate::search::Query;
 use crate::store::{Added, ClickAction, FolderId, Link, LinkId, Shared, Sort, Store};
+use crate::strings;
 use crate::theme::{self, Btn, Pal, Textures};
 use crate::urlx;
 use crate::win::{self, Event, Hub};
@@ -35,7 +37,7 @@ impl Page {
     }
 }
 
-/// Ссылку тащат мышью на папку в боковой панели.
+/// A link is being dragged with the mouse onto a folder in the sidebar.
 #[derive(Clone, Copy)]
 struct LinkDrag(LinkId);
 
@@ -64,7 +66,7 @@ struct Rename {
     focus_pending: bool,
 }
 
-/// Действия, которые нельзя делать, пока библиотека заблокирована на кадр (диалоги файлов).
+/// Actions that cannot run while the library is locked for the frame (file dialogs).
 enum After {
     Export,
 }
@@ -98,39 +100,32 @@ pub struct App {
     updater: Updater,
 }
 
-fn plural(n: usize, one: &str, few: &str, many: &str) -> String {
-    let (m10, m100) = (n % 10, n % 100);
-    let w = if m10 == 1 && m100 != 11 {
-        one
-    } else if (2..=4).contains(&m10) && !(12..=14).contains(&m100) {
-        few
-    } else {
-        many
-    };
-    format!("{n} {w}")
+/// "5 links" / "5 ссылок" for the current interface language.
+fn pl(n: usize, forms: &[&str; 3]) -> String {
+    i18n::plural(strings::lang(), n, forms)
 }
 
-const MONTHS: [&str; 12] = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"];
-
 fn fmt_date(ts: i64) -> String {
+    let tr = strings::s();
     let t = win::local_time(ts);
     let now = win::local_time(crate::store::now_unix());
     let same = |a: &win::LocalTime, b: &win::LocalTime| a.year == b.year && a.month == b.month && a.day == b.day;
     if same(&t, &now) {
-        return format!("сегодня, {}:{:02}", t.hour, t.minute);
+        return format!("{}, {:02}:{:02}", tr.today, t.hour, t.minute);
     }
     if same(&win::local_time(ts + 86_400), &now) {
-        return format!("вчера, {}:{:02}", t.hour, t.minute);
+        return format!("{}, {:02}:{:02}", tr.yesterday, t.hour, t.minute);
     }
-    let m = MONTHS[(t.month.clamp(1, 12) - 1) as usize];
-    if t.year == now.year { format!("{} {m}", t.day) } else { format!("{} {m} {}", t.day, t.year) }
+    let m = tr.months[(t.month.clamp(1, 12) - 1) as usize];
+    let day_month = if tr.day_first { format!("{} {m}", t.day) } else { format!("{m} {}", t.day) };
+    if t.year == now.year { day_month } else if tr.day_first { format!("{day_month} {}", t.year) } else { format!("{day_month}, {}", t.year) }
 }
 
 fn esc_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// Файл закладок в формате браузеров (Netscape) — его можно импортировать в Chrome, Firefox, Edge.
+/// Bookmarks file in the browser (Netscape) format: it can be imported into Chrome, Firefox and Edge.
 fn bookmarks_html(st: &Store) -> String {
     let mut out = String::from(
         "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n\
@@ -158,14 +153,18 @@ fn bookmarks_html(st: &Store) -> String {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, store: Shared, background: bool) -> Self {
-        theme::install(&cc.egui_ctx);
+        let mode = store.lock().map(|s| s.lib.settings.theme).unwrap_or_default();
+        theme::install(&cc.egui_ctx, mode);
         let hwnd = match cc.window_handle().map(|h| h.as_raw()) {
             Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
             _ => 0,
         };
         let hub = Arc::new(Hub { store: store.clone(), ctx: cc.egui_ctx.clone(), events: Mutex::new(Vec::new()), clip_url: Mutex::new(None) });
         win::spawn_tray(hub.clone());
-        let logo = egui::ColorImage::from_rgba_unmultiplied([128, 128], &crate::icon::icon_rgba(128));
+        let logo = match eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
+            Ok(i) => egui::ColorImage::from_rgba_unmultiplied([i.width as usize, i.height as usize], &i.rgba),
+            Err(_) => egui::ColorImage::filled([1, 1], Color32::TRANSPARENT),
+        };
         let logo_tex = cc.egui_ctx.load_texture("logo", logo, TextureOptions::LINEAR);
         let updater = Updater::new("save-urls", "GrigoryyKach/save-urls", env!("CARGO_PKG_VERSION"));
         if store.lock().map(|s| s.lib.settings.check_updates).unwrap_or(true) {
@@ -193,7 +192,7 @@ impl App {
             autostart_error: false,
             updater,
         };
-        // Только для ручной проверки debug-сборки: SAVE_URLS_DEBUG="q:текст;page:settings;edit:10;folder:1;new".
+        // For manual checks of debug builds only: SAVE_URLS_DEBUG="q:text;page:settings;edit:10;folder:1;new;lang:ru".
         #[cfg(debug_assertions)]
         if let Ok(dbg) = std::env::var("SAVE_URLS_DEBUG") {
             let st = app.store.clone();
@@ -209,7 +208,12 @@ impl App {
                     "new" => app.open_editor(&st, None, Some(v.to_string()).filter(|s| !s.is_empty())),
                     "delete-folder" => app.confirm_delete_folder = v.parse().ok(),
                     "theme" if v == "light" => cc.egui_ctx.set_theme(egui::ThemePreference::Light),
-                    "toast" => app.toast = Some(Toast { text: "Удалено: Excalidraw".into(), undo: Some(Link::default()), edit: None, at: 0.0 }),
+                    "lang" => {
+                        if let Some(l) = i18n::Lang::from_code(v) {
+                            strings::set_lang(l);
+                        }
+                    }
+                    "toast" => app.toast = Some(Toast { text: strings::s().deleted.replace("{t}", "Excalidraw"), undo: Some(Link::default()), edit: None, at: 0.0 }),
                     _ => {}
                 }
             }
@@ -260,7 +264,7 @@ impl App {
         self.editor = Some(ed);
     }
 
-    /// Быстрое сохранение (из баннера буфера обмена или Ctrl+V): без диалога, с уведомлением внизу.
+    /// Quick save (from the clipboard banner or Ctrl+V): no dialog, with a notice at the bottom.
     fn quick_save(&mut self, st: &mut Store, url: &str, now: f64) {
         let folder = self.page.folder_filter();
         match st.add_url(url, folder) {
@@ -270,17 +274,17 @@ impl App {
                     win::fetch_title_async(self.store.clone(), self.hub.ctx.clone(), id, url.to_string(), None);
                 }
                 let place = st.folder_name(st.link(id).and_then(|l| l.folder));
-                self.toast = Some(Toast { text: format!("Ссылка сохранена в «{place}»"), undo: None, edit: Some(id), at: now });
+                self.toast = Some(Toast { text: strings::s().saved_in.replace("{place}", &place), undo: None, edit: Some(id), at: now });
             }
             Added::Exists(id) => {
-                self.toast = Some(Toast { text: "Эта ссылка уже есть в библиотеке".into(), undo: None, edit: Some(id), at: now });
+                self.toast = Some(Toast { text: strings::s().already_in.into(), undo: None, edit: Some(id), at: now });
             }
         }
     }
 
     fn delete_link(&mut self, st: &mut Store, id: LinkId, now: f64) {
         if let Some(l) = st.delete_link(id) {
-            self.toast = Some(Toast { text: format!("Удалено: {}", win::ellipsize(&l.title, 40)), undo: Some(l), edit: None, at: now });
+            self.toast = Some(Toast { text: strings::s().deleted.replace("{t}", &win::ellipsize(&l.title, 40)), undo: Some(l), edit: None, at: now });
         }
     }
 
@@ -320,9 +324,10 @@ impl App {
         ids
     }
 
-    // ───────────────────────── боковая панель ─────────────────────────
+    // ───────────────────────── sidebar ─────────────────────────
 
     fn sidebar(&mut self, ui: &mut Ui, st: &mut Store, p: &Pal) {
+        let t = strings::s();
         ui.horizontal(|ui| {
             kit::logo(ui, 36.0, &self.logo_tex);
             ui.add_space(4.0);
@@ -330,17 +335,17 @@ impl App {
                 ui.add_space(1.0);
                 ui.label(RichText::new("Save URLs").font(theme::semi(15.5)).color(p.text));
                 ui.add_space(-8.0);
-                ui.label(RichText::new("Библиотека ссылок").font(theme::reg(12.0)).color(p.muted));
+                ui.label(RichText::new(t.tagline).font(theme::reg(12.0)).color(p.muted));
             });
         });
         ui.add_space(18.0);
 
         let dragging = DragAndDrop::has_payload_of_type::<LinkDrag>(ui.ctx());
         ui.spacing_mut().item_spacing.y = 2.0;
-        theme::caps(ui, "Библиотека", p);
+        theme::caps(ui, t.library, p);
         ui.add_space(4.0);
         let total = st.lib.links.len();
-        if kit::nav_row(ui, Id::unique("nav-all"), kit::NavRow { icon: kit::icon_link, label: "Все ссылки", count: Some(total), active: self.page == Page::All, drop_hover: false }, p).clicked() {
+        if kit::nav_row(ui, Id::unique("nav-all"), kit::NavRow { icon: kit::icon_link, label: t.all_links, count: Some(total), active: self.page == Page::All, drop_hover: false }, p).clicked() {
             self.page = Page::All;
         }
         let unsorted = st.count_in(None);
@@ -349,7 +354,7 @@ impl App {
             kit::nav_row(
                 ui,
                 Id::unique("nav-unsorted"),
-                kit::NavRow { icon: kit::icon_inbox, label: "Без папки", count: Some(unsorted), active: self.page == Page::Unsorted, drop_hover: hover },
+                kit::NavRow { icon: kit::icon_inbox, label: t.no_folder, count: Some(unsorted), active: self.page == Page::Unsorted, drop_hover: hover },
                 p,
             )
         });
@@ -363,11 +368,11 @@ impl App {
 
         ui.add_space(16.0);
         ui.horizontal(|ui| {
-            theme::caps(ui, "Папки", p);
+            theme::caps(ui, t.folders, p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(26.0, 22.0), Sense::hover());
-                if kit::icon_button(ui, r, Id::unique("add-folder"), kit::icon_plus, "Новая папка", false, p).clicked() {
-                    let id = st.add_folder("Новая папка");
+                if kit::icon_button(ui, r, Id::unique("add-folder"), kit::icon_plus, t.new_folder, false, p).clicked() {
+                    let id = st.add_folder(t.new_folder);
                     self.rename = Some(Rename { id, text: st.folder_name(Some(id)), focus_pending: true });
                     self.page = Page::Folder(id);
                 }
@@ -375,23 +380,23 @@ impl App {
         });
         ui.add_space(4.0);
 
-        // Папки прокручиваются, «Настройки» остаются внизу.
+        // Folders scroll, "Settings" stays at the bottom.
         let bottom_h = 46.0;
         let avail = ui.available_height() - bottom_h;
         ScrollArea::vertical().id_salt("folders").max_height(avail.max(60.0)).auto_shrink([false, true]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             if st.lib.folders.is_empty() {
                 ui.add_space(2.0);
-                theme::hint(ui, "Создайте папку кнопкой «+», чтобы разложить ссылки по темам. Ссылки можно перетаскивать на папки мышью.", p);
+                theme::hint(ui, t.folders_empty_hint, p);
             }
             let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
             for (idx, (fid, name)) in folders.into_iter().enumerate() {
                 if let Some(rn) = self.rename.as_mut().filter(|r| r.id == fid) {
                     let id = Id::unique(("rename", fid));
-                    let resp = kit::text_field(ui, &mut rn.text, "Название папки", Some(kit::icon_folder), id, p);
+                    let resp = kit::text_field(ui, &mut rn.text, t.folder_name_ph, Some(kit::icon_folder), id, p);
                     if rn.focus_pending {
                         resp.request_focus();
-                        // Выделить всё, чтобы сразу печатать новое имя.
+                        // Select everything so a new name can be typed at once.
                         if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
                             let range = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(rn.text.chars().count()));
                             state.cursor.set_char_range(Some(range));
@@ -431,25 +436,25 @@ impl App {
                 let nfolders = st.lib.folders.len();
                 resp.context_menu(|ui| {
                     ui.set_min_width(220.0);
-                    if kit::menu_item(ui, "Переименовать", Some(kit::icon_edit), false, false, p).clicked() {
+                    if kit::menu_item(ui, t.rename, Some(kit::icon_edit), false, false, p).clicked() {
                         self.rename = Some(Rename { id: fid, text: name.clone(), focus_pending: true });
                         ui.close();
                     }
-                    if kit::menu_item(ui, "Сохранять сюда новые ссылки", Some(kit::icon_inbox), is_default, false, p).clicked() {
+                    if kit::menu_item(ui, t.save_here, Some(kit::icon_inbox), is_default, false, p).clicked() {
                         st.lib.settings.default_folder = if is_default { None } else { Some(fid) };
                         st.touch();
                         ui.close();
                     }
-                    if idx > 0 && kit::menu_item(ui, "Переместить выше", None, false, false, p).clicked() {
+                    if idx > 0 && kit::menu_item(ui, t.move_up, None, false, false, p).clicked() {
                         st.move_folder(idx, idx - 1);
                         ui.close();
                     }
-                    if idx + 1 < nfolders && kit::menu_item(ui, "Переместить ниже", None, false, false, p).clicked() {
+                    if idx + 1 < nfolders && kit::menu_item(ui, t.move_down, None, false, false, p).clicked() {
                         st.move_folder(idx, idx + 1);
                         ui.close();
                     }
                     kit::menu_separator(ui, p);
-                    if kit::menu_item(ui, "Удалить папку", Some(kit::icon_trash), false, true, p).clicked() {
+                    if kit::menu_item(ui, t.delete_folder, Some(kit::icon_trash), false, true, p).clicked() {
                         self.confirm_delete_folder = Some(fid);
                         ui.close();
                     }
@@ -457,87 +462,88 @@ impl App {
             }
         });
 
-        // Низ панели.
+        // Bottom of the panel.
         let rest = ui.available_rect_before_wrap();
         let r = Rect::from_min_max(pos2(rest.left(), rest.bottom() - 38.0), pos2(rest.right(), rest.bottom()));
         if let UpdateState::Available { version, .. } = self.updater.state() {
             let r2 = Rect::from_min_max(pos2(rest.left(), r.top() - 40.0), pos2(rest.right(), r.top() - 6.0));
             let mut up = ui.new_child(egui::UiBuilder::new().max_rect(r2));
-            if theme::button(&mut up, &format!("Доступна версия {version}"), Btn::Soft, p).clicked() {
+            if theme::button(&mut up, &t.update_available.replace("{v}", &version), Btn::Soft, p).clicked() {
                 self.page = Page::Settings;
             }
         }
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
-        if kit::nav_row(&mut child, Id::unique("nav-settings"), kit::NavRow { icon: kit::icon_gear, label: "Настройки", count: None, active: self.page == Page::Settings, drop_hover: false }, p).clicked() {
+        if kit::nav_row(&mut child, Id::unique("nav-settings"), kit::NavRow { icon: kit::icon_gear, label: t.settings, count: None, active: self.page == Page::Settings, drop_hover: false }, p).clicked() {
             self.page = Page::Settings;
         }
     }
 
-    // ───────────────────────── библиотека ─────────────────────────
+    // ───────────────────────── library ─────────────────────────
 
     fn library(&mut self, ui: &mut Ui, st: &mut Store, p: &Pal) {
+        let t = strings::s();
         let now = Self::now(ui);
         let ids = self.visible_ids(st);
         let (title, total) = match self.page {
-            Page::All => ("Все ссылки".to_string(), st.lib.links.len()),
-            Page::Unsorted => ("Без папки".to_string(), st.count_in(None)),
+            Page::All => (t.all_links.to_string(), st.lib.links.len()),
+            Page::Unsorted => (t.no_folder.to_string(), st.count_in(None)),
             Page::Folder(f) => (st.folder_name(Some(f)), st.count_in(Some(f))),
             Page::Settings => unreachable!(),
         };
 
-        // Заголовок и кнопка «Добавить».
+        // Heading and the "Add" button.
         let head = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::hover()).0;
         ui.painter().text(head.left_top() + vec2(0.0, 0.0), Align2::LEFT_TOP, &title, theme::bold(26.0), p.text);
         let sub = if self.query.trim().is_empty() {
-            if total == 0 { "Пока пусто".into() } else { plural(total, "ссылка", "ссылки", "ссылок") }
+            if total == 0 { t.empty_now.into() } else { pl(total, &t.links) }
         } else {
-            format!("Найдено: {} из {}", ids.len(), total)
+            t.found.replace("{n}", &ids.len().to_string()).replace("{total}", &total.to_string())
         };
         ui.painter().text(head.left_top() + vec2(1.0, 34.0), Align2::LEFT_TOP, sub, theme::reg(13.5), p.muted);
-        let brect = Rect::from_min_size(pos2(head.right() - 200.0, head.top() + 4.0), vec2(200.0, 42.0));
-        if theme::gradient_button(ui, brect, Id::unique("add-link"), "Добавить ссылку", Some(kit::icon_plus), true, &self.tex, p).clicked() {
+        let brect = Rect::from_min_size(pos2(head.right() - 220.0, head.top() + 4.0), vec2(220.0, 42.0));
+        if theme::gradient_button(ui, brect, Id::unique("add-link"), t.add_link, Some(kit::icon_plus), true, &self.tex, p).clicked() {
             let clip = self.hub.clip_url.lock().unwrap().clone().filter(|u| st.find_url(u).is_none());
             self.open_editor(st, None, clip);
         }
         ui.add_space(12.0);
 
-        // Ссылка в буфере обмена, которой ещё нет в библиотеке.
+        // A link in the clipboard that is not in the library yet.
         let clip = self.hub.clip_url.lock().unwrap().clone().filter(|u| st.find_url(u).is_none());
         if let Some(url) = clip {
             let r = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover()).0;
             let painter = ui.painter();
             painter.rect(r, 12.0, p.accent_soft, Stroke::NONE, StrokeKind::Inside);
             kit::icon_clipboard(painter, pos2(r.left() + 22.0, r.center().y), p.accent);
-            let bw = 110.0;
-            let clip_r = Rect::from_min_max(pos2(r.left() + 42.0, r.top()), pos2(r.right() - bw - 100.0, r.bottom()));
+            let bw = 120.0;
+            let clip_r = Rect::from_min_max(pos2(r.left() + 42.0, r.top()), pos2(r.right() - bw - 130.0, r.bottom()));
             let mut job = LayoutJob::default();
-            job.append("В буфере обмена: ", 0.0, TextFormat { font_id: theme::reg(13.5), color: p.muted, ..Default::default() });
+            job.append(t.in_clipboard, 0.0, TextFormat { font_id: theme::reg(13.5), color: p.muted, ..Default::default() });
             job.append(&urlx::pretty(&url), 0.0, TextFormat { font_id: theme::semi(13.5), color: p.text, ..Default::default() });
             job.wrap = TextWrapping { max_width: clip_r.width(), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
             let g = painter.layout_job(job);
             painter.galley(pos2(clip_r.left(), r.center().y - g.size().y / 2.0), g, p.text);
             let save_r = Rect::from_min_size(pos2(r.right() - bw - 8.0, r.top() + 7.0), vec2(bw, 32.0));
-            if theme::button_at(ui, save_r, Id::unique("clip-save"), "Сохранить", Btn::Soft, p).clicked() {
+            if theme::button_at(ui, save_r, Id::unique("clip-save"), t.save, Btn::Soft, p).clicked() {
                 self.quick_save(st, &url, now);
             }
-            let edit_r = Rect::from_min_size(pos2(save_r.left() - 92.0, r.top() + 7.0), vec2(86.0, 32.0));
-            if theme::button_at(ui, edit_r, Id::unique("clip-edit"), "С описанием", Btn::Link, p).clicked() {
+            let edit_r = Rect::from_min_size(pos2(save_r.left() - 126.0, r.top() + 7.0), vec2(120.0, 32.0));
+            if theme::button_at(ui, edit_r, Id::unique("clip-edit"), t.with_description, Btn::Link, p).clicked() {
                 self.open_editor(st, None, Some(url.clone()));
             }
             ui.add_space(10.0);
         }
 
-        // Поиск и сортировка.
+        // Search and sorting.
         ui.horizontal(|ui| {
             let sort_w = 210.0;
             ui.allocate_ui(vec2(ui.available_width() - sort_w - 8.0, 38.0), |ui| {
-                let resp = kit::text_field(ui, &mut self.query, "Поиск по названию, описанию и адресу", Some(kit::icon_search), Id::unique("search"), p);
+                let resp = kit::text_field(ui, &mut self.query, t.search_ph, Some(kit::icon_search), Id::unique("search"), p);
                 if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
                     self.query.clear();
                 }
                 if !self.query.is_empty() {
                     let r = Rect::from_center_size(pos2(resp.rect.right() - 10.0, resp.rect.center().y), vec2(26.0, 26.0));
-                    if kit::icon_button(ui, r, Id::unique("search-clear"), kit::icon_close, "Очистить (Esc)", false, p).clicked() {
+                    if kit::icon_button(ui, r, Id::unique("search-clear"), kit::icon_close, t.clear_esc, false, p).clicked() {
                         self.query.clear();
                     }
                 }
@@ -586,7 +592,7 @@ impl App {
                 "copy" => {
                     if let Some(l) = st.link(id) {
                         ui.ctx().copy_text(l.url.clone());
-                        self.toast = Some(Toast { text: "Ссылка скопирована".into(), undo: None, edit: None, at: now });
+                        self.toast = Some(Toast { text: t.copied.into(), undo: None, edit: None, at: now });
                     }
                 }
                 "edit" => self.open_editor(st, Some(id), None),
@@ -612,50 +618,72 @@ impl App {
         for k in 0..4 {
             ui.painter().extend(egui::Shape::dashed_line(&[c[k], c[k + 1]], stroke, 6.0, 4.0));
         }
+        let t = strings::s();
         let (head, body) = if !self.query.trim().is_empty() {
-            ("Ничего не нашлось".to_string(), "Попробуйте другое слово — поиск понимает опечатки и неправильную раскладку".to_string())
+            (t.nothing_found.to_string(), t.nothing_found_hint.to_string())
         } else if total == 0 && st.lib.links.is_empty() {
-            (
-                "Здесь будут ваши ссылки".to_string(),
-                "Скопируйте адрес страницы и щёлкните значок Save URLs в трее, нажмите Ctrl+Alt+S или Ctrl+V прямо здесь".to_string(),
-            )
+            (t.empty_lib.to_string(), t.empty_lib_hint.to_string())
         } else {
-            ("В этой папке пока пусто".to_string(), "Перетащите сюда ссылку мышью или выберите папку при сохранении".to_string())
+            (t.empty_folder.to_string(), t.empty_folder_hint.to_string())
         };
         ui.painter().text(r.center() - vec2(0.0, 14.0), Align2::CENTER_CENTER, head, theme::semi(16.0), p.text);
         let g = ui.painter().layout(body, theme::reg(13.5), p.muted, (r.width() - 60.0).min(520.0));
         ui.painter().galley(pos2(r.center().x - g.size().x / 2.0, r.center().y + 6.0), g, p.muted);
     }
 
-    // ───────────────────────── настройки ─────────────────────────
+    // ───────────────────────── settings ─────────────────────────
 
     fn settings(&mut self, ui: &mut Ui, st: &mut Store, p: &Pal) {
+        let t = strings::s();
+        let nt = nimvoro::strings(strings::lang());
         ScrollArea::vertical().id_salt("settings").auto_shrink([false; 2]).show(ui, |ui| {
             let w = ui.available_width().min(680.0);
             ui.set_width(w);
-            ui.label(RichText::new("Настройки").font(theme::bold(26.0)).color(p.text));
+            ui.label(RichText::new(t.settings).font(theme::bold(26.0)).color(p.text));
             ui.add_space(-4.0);
-            ui.label(RichText::new("Окно можно закрыть — Save URLs продолжит работать в трее").font(theme::reg(13.5)).color(p.muted));
+            ui.label(RichText::new(t.settings_sub).font(theme::reg(13.5)).color(p.muted));
             ui.add_space(14.0);
 
             let mut changed = false;
             let mut hotkey_changed = false;
 
-            theme::caps(ui, "Значок в трее", p);
+            theme::caps(ui, t.sec_appearance, p);
+            ui.add_space(2.0);
+            kit::card_frame(p).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let mut lang = strings::lang();
+                if i18n::language_row(ui, &mut lang, p) {
+                    strings::set_lang(lang);
+                    st.lib.settings.language = Some(lang.code().to_string());
+                    changed = true;
+                    // The tray thread refreshes its tooltip.
+                    hotkey_changed = true;
+                }
+                theme::divider(ui, p);
+                let mut mode = st.lib.settings.theme;
+                if i18n::theme_row(ui, &mut mode, strings::lang(), p) {
+                    st.lib.settings.theme = mode;
+                    theme::apply(ui.ctx(), mode);
+                    changed = true;
+                }
+            });
+            ui.add_space(16.0);
+
+            theme::caps(ui, t.sec_tray, p);
             ui.add_space(2.0);
             kit::card_frame(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 330.0).max(160.0));
-                        ui.label(RichText::new("Щелчок по значку").font(theme::reg(14.0)).color(p.text));
+                        ui.set_width((ui.available_width() - 380.0).max(160.0));
+                        ui.label(RichText::new(t.click_title).font(theme::reg(14.0)).color(p.text));
                         ui.add_space(-6.0);
-                        theme::hint(ui, "Правая кнопка всегда открывает меню", p);
+                        theme::hint(ui, t.click_hint, p);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let sel = if st.lib.settings.click == ClickAction::Save { 0 } else { 1 };
-                        // В right_to_left сегменты рисуются как обычно — layout влияет только на позицию.
-                        if let Some(i) = kit::segmented(ui, &["Сохранить ссылку", "Открыть библиотеку"], sel, p) {
+                        // In right_to_left the segments are drawn as usual: the layout only affects the position.
+                        if let Some(i) = kit::segmented(ui, &[t.click_save, t.click_open], sel, p) {
                             st.lib.settings.click = if i == 0 { ClickAction::Save } else { ClickAction::Open };
                             changed = true;
                             hotkey_changed = true;
@@ -664,24 +692,24 @@ impl App {
                 });
                 theme::divider(ui, p);
                 let mut hk = st.lib.settings.hotkey;
-                if kit::switch_row(ui, p, "Горячая клавиша Ctrl+Alt+S", "Сохраняет ссылку из буфера обмена в любой программе", &mut hk) {
+                if kit::switch_row(ui, p, t.hotkey_title, t.hotkey_hint, &mut hk) {
                     st.lib.settings.hotkey = hk;
                     changed = true;
                     hotkey_changed = true;
                 }
                 if hk && !win::HOTKEY_OK.load(std::sync::atomic::Ordering::SeqCst) {
-                    ui.label(RichText::new("Сочетание уже занято другой программой").font(theme::reg(12.5)).color(kit::DANGER));
+                    ui.label(RichText::new(t.hotkey_busy).font(theme::reg(12.5)).color(kit::DANGER));
                 }
                 theme::divider(ui, p);
                 let mut n = st.lib.settings.notify;
-                if kit::switch_row(ui, p, "Уведомления", "Показывать уведомление Windows после сохранения из трея", &mut n) {
+                if kit::switch_row(ui, p, t.notify_title, t.notify_hint, &mut n) {
                     st.lib.settings.notify = n;
                     changed = true;
                 }
             });
             ui.add_space(16.0);
 
-            theme::caps(ui, "Новые ссылки", p);
+            theme::caps(ui, t.sec_new, p);
             ui.add_space(2.0);
             kit::card_frame(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -689,8 +717,8 @@ impl App {
                 if kit::switch_row(
                     ui,
                     p,
-                    "Загружать название страницы",
-                    "После сохранения Save URLs откроет страницу и возьмёт её заголовок. Без этого названием станет адрес сайта",
+                    t.fetch_title,
+                    t.fetch_hint,
                     &mut f,
                 ) {
                     st.lib.settings.fetch_titles = f;
@@ -700,9 +728,9 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width((ui.available_width() - 250.0).max(160.0));
-                        ui.label(RichText::new("Папка для новых ссылок").font(theme::reg(14.0)).color(p.text));
+                        ui.label(RichText::new(t.default_folder).font(theme::reg(14.0)).color(p.text));
                         ui.add_space(-6.0);
-                        theme::hint(ui, "Куда попадают ссылки, сохранённые из трея", p);
+                        theme::hint(ui, t.default_folder_hint, p);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let cur = st.lib.settings.default_folder;
@@ -710,7 +738,7 @@ impl App {
                         let resp = kit::dropdown_button(ui, &label, Some(kit::icon_folder), 240.0, Id::unique("default-folder"), p);
                         let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
                         Popup::menu(&resp).frame(kit::menu_frame(p)).width(240.0).show(|ui| {
-                            if kit::menu_item(ui, "Без папки", Some(kit::icon_inbox), cur.is_none(), false, p).clicked() {
+                            if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), cur.is_none(), false, p).clicked() {
                                 st.lib.settings.default_folder = None;
                                 changed = true;
                                 ui.close();
@@ -728,12 +756,12 @@ impl App {
             });
             ui.add_space(16.0);
 
-            theme::caps(ui, "Система", p);
+            theme::caps(ui, t.sec_system, p);
             ui.add_space(2.0);
             kit::card_frame(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let mut a = self.autostart;
-                if kit::switch_row(ui, p, "Запускать вместе с Windows", "Save URLs будет стартовать сразу в трей, без окна", &mut a) {
+                if kit::switch_row(ui, p, t.autostart_title, t.autostart_hint, &mut a) {
                     if win::set_autostart(a) {
                         self.autostart = a;
                         self.autostart_error = false;
@@ -742,24 +770,24 @@ impl App {
                     }
                 }
                 if self.autostart_error {
-                    ui.label(RichText::new("Не удалось изменить автозапуск").font(theme::reg(12.5)).color(kit::DANGER));
+                    ui.label(RichText::new(t.autostart_error).font(theme::reg(12.5)).color(kit::DANGER));
                 }
                 theme::divider(ui, p);
-                ui.label(RichText::new("Файл библиотеки").font(theme::reg(14.0)).color(p.text));
+                ui.label(RichText::new(t.lib_file).font(theme::reg(14.0)).color(p.text));
                 ui.add_space(-6.0);
                 let path = st.path().cloned();
-                let path_text = path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "не определён".into());
-                theme::hint(ui, &format!("{path_text} · {}, {}", plural(st.lib.links.len(), "ссылка", "ссылки", "ссылок"), plural(st.lib.folders.len(), "папка", "папки", "папок")), p);
+                let path_text = path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| t.unknown.into());
+                theme::hint(ui, &format!("{path_text} · {}, {}", pl(st.lib.links.len(), &t.links), pl(st.lib.folders.len(), &t.folders_pl)), p);
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if theme::button(ui, "Открыть папку", Btn::Soft, p).clicked()
+                    if theme::button(ui, t.open_folder, Btn::Soft, p).clicked()
                         && let Some(dir) = path.as_ref().and_then(|p| p.parent())
                     {
                         let _ = std::fs::create_dir_all(dir);
                         win::open_folder(dir);
                     }
-                    if theme::button(ui, "Экспорт закладок…", Btn::Ghost, p)
-                        .on_hover_text("HTML-файл закладок: его можно импортировать в Chrome, Firefox или Edge")
+                    if theme::button(ui, t.export, Btn::Ghost, p)
+                        .on_hover_text(t.export_tip)
                         .clicked()
                     {
                         self.after = Some(After::Export);
@@ -767,20 +795,20 @@ impl App {
                 });
                 theme::divider(ui, p);
                 let mut cu = st.lib.settings.check_updates;
-                if kit::switch_row(ui, p, "Проверять обновления при запуске", "Узнавать о новых версиях на GitHub и обновляться через NIMVORO", &mut cu) {
+                if kit::switch_row(ui, p, nt.check_on_start, nt.check_on_start_hint, &mut cu) {
                     st.lib.settings.check_updates = cu;
                     changed = true;
                 }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    theme::hint(ui, &self.updater.status_text(), p);
+                    theme::hint(ui, &self.updater.status_text(strings::lang()), p);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if let UpdateState::Available { .. } = self.updater.state() {
-                            if theme::button(ui, "Обновить", Btn::Soft, p).clicked() && self.updater.apply() {
+                            if theme::button(ui, nt.update_btn, Btn::Soft, p).clicked() && self.updater.apply() {
                                 st.save_now();
                                 win::post_tray(win::WM_APP_QUIT);
                             }
-                        } else if !self.updater.is_checking() && theme::button(ui, "Проверить", Btn::Link, p).clicked() {
+                        } else if !self.updater.is_checking() && theme::button(ui, nt.check_now, Btn::Link, p).clicked() {
                             let c = ui.ctx().clone();
                             self.updater.check(move || c.request_repaint());
                         }
@@ -790,12 +818,12 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width((ui.available_width() - 160.0).max(160.0));
-                        ui.label(RichText::new("Выйти из Save URLs").font(theme::reg(14.0)).color(p.text));
+                        ui.label(RichText::new(t.quit_title).font(theme::reg(14.0)).color(p.text));
                         ui.add_space(-6.0);
-                        theme::hint(ui, "Полностью закрыть программу и убрать значок из трея", p);
+                        theme::hint(ui, t.quit_hint, p);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::button(ui, "Выйти", Btn::Ghost, p).clicked() {
+                        if theme::button(ui, t.quit, Btn::Ghost, p).clicked() {
                             st.save_now();
                             win::post_tray(win::WM_APP_QUIT);
                         }
@@ -803,7 +831,7 @@ impl App {
                 });
             });
             ui.add_space(16.0);
-            theme::hint(ui, "Горячие клавиши в окне: Ctrl+V — сохранить ссылку из буфера, Ctrl+N — новая ссылка, Ctrl+F — поиск.", p);
+            theme::hint(ui, t.keys_hint, p);
             ui.add_space(12.0);
 
             if changed {
@@ -815,11 +843,12 @@ impl App {
         });
     }
 
-    // ───────────────────────── окна поверх ─────────────────────────
+    // ───────────────────────── overlays ─────────────────────────
 
     fn editor_modal(&mut self, ctx: &egui::Context, st: &mut Store, p: &Pal, now: f64) {
+        let t = strings::s();
         let Some(ed) = self.editor.as_mut() else { return };
-        // Результат «Загрузить с сайта».
+        // Result of "Get from site".
         if let Some(slot) = &ed.fetch {
             let res = slot.lock().unwrap().take();
             match res {
@@ -828,7 +857,7 @@ impl App {
                     ed.fetch = None;
                 }
                 Some(None) => {
-                    ed.error = Some("Не удалось получить название страницы".into());
+                    ed.error = Some(t.err_fetch.into());
                     ed.fetch = None;
                 }
                 None => ctx.request_repaint_after(Duration::from_millis(100)),
@@ -856,15 +885,15 @@ impl App {
                 ui.set_width(480.0);
                 ui.spacing_mut().item_spacing.y = 6.0;
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(if ed.id.is_some() { "Ссылка" } else { "Новая ссылка" }).font(theme::bold(21.0)).color(p.text));
+                    ui.label(RichText::new(if ed.id.is_some() { t.link } else { t.new_link }).font(theme::bold(21.0)).color(p.text));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let (r, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
-                        if kit::icon_button(ui, r, Id::unique("ed-close"), kit::icon_close, "Закрыть (Esc)", false, p).clicked() {
+                        if kit::icon_button(ui, r, Id::unique("ed-close"), kit::icon_close, t.close_esc, false, p).clicked() {
                             close = true;
                         }
                         if let Some(id) = ed.id {
                             let (r, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
-                            if kit::icon_button(ui, r, Id::unique("ed-open"), kit::icon_external, "Открыть в браузере", false, p).clicked() {
+                            if kit::icon_button(ui, r, Id::unique("ed-open"), kit::icon_external, t.open_browser, false, p).clicked() {
                                 win::open_url(&ed.url);
                             }
                             let _ = id;
@@ -873,7 +902,7 @@ impl App {
                 });
                 ui.add_space(8.0);
 
-                theme::caps(ui, "Адрес", p);
+                theme::caps(ui, t.address, p);
                 let url_resp = kit::text_field(ui, &mut ed.url, "https://…", Some(kit::icon_link), Id::unique("ed-url"), p);
                 if ed.focus_pending {
                     if ed.url.trim().is_empty() {
@@ -886,11 +915,11 @@ impl App {
                 ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
-                    theme::caps(ui, "Название", p);
+                    theme::caps(ui, t.title, p);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ed.fetch.is_some() {
-                            ui.label(RichText::new("загрузка…").font(theme::reg(12.5)).color(p.muted));
-                        } else if theme::button(ui, "Взять с сайта", Btn::Link, p).clicked() {
+                            ui.label(RichText::new(t.loading).font(theme::reg(12.5)).color(p.muted));
+                        } else if theme::button(ui, t.take_from_site, Btn::Link, p).clicked() {
                             match urlx::extract_url(&ed.url) {
                                 Some(u) => {
                                     let slot = Arc::new(Mutex::new(None));
@@ -903,23 +932,23 @@ impl App {
                                     ed.fetch = Some(slot);
                                     ed.error = None;
                                 }
-                                None => ed.error = Some("Сначала введите адрес".into()),
+                                None => ed.error = Some(t.err_enter_url.into()),
                             }
                         }
                     });
                 });
-                let hint = if ed.id.is_none() && fetch_on { "Загрузится с сайта автоматически" } else { "Как назвать ссылку" };
+                let hint = if ed.id.is_none() && fetch_on { t.title_auto } else { t.title_ph };
                 let title_resp = kit::text_field(ui, &mut ed.title, hint, None, Id::unique("ed-title"), p);
                 ui.add_space(6.0);
 
-                theme::caps(ui, "Описание", p);
-                kit::multiline_field(ui, &mut ed.desc, "Необязательно: что там интересного, зачем сохранили", 3, Id::unique("ed-desc"), p);
+                theme::caps(ui, t.description, p);
+                kit::multiline_field(ui, &mut ed.desc, t.description_ph, 3, Id::unique("ed-desc"), p);
                 ui.add_space(6.0);
 
-                theme::caps(ui, "Папка", p);
+                theme::caps(ui, t.folder, p);
                 let resp = kit::dropdown_button(ui, &folder_label, Some(if ed.folder.is_some() { kit::icon_folder } else { kit::icon_inbox }), ui.available_width(), Id::unique("ed-folder"), p);
                 Popup::menu(&resp).frame(kit::menu_frame(p)).width(resp.rect.width()).show(|ui| {
-                    if kit::menu_item(ui, "Без папки", Some(kit::icon_inbox), ed.folder.is_none(), false, p).clicked() {
+                    if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), ed.folder.is_none(), false, p).clicked() {
                         ed.folder = None;
                         ui.close();
                     }
@@ -947,10 +976,10 @@ impl App {
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
                 let save_r = Rect::from_min_max(pos2(row.right() - 150.0, row.top()), row.max);
                 let cancel_r = Rect::from_min_size(pos2(save_r.left() - 118.0, row.top()), vec2(110.0, h));
-                if theme::gradient_button(ui, save_r, Id::unique("ed-save"), if ed.id.is_some() { "Сохранить" } else { "Добавить" }, None, true, &self.tex, p).clicked() {
+                if theme::gradient_button(ui, save_r, Id::unique("ed-save"), if ed.id.is_some() { t.save } else { t.add }, None, true, &self.tex, p).clicked() {
                     save = true;
                 }
-                if theme::button_at(ui, cancel_r, Id::unique("ed-cancel"), "Отмена", Btn::Ghost, p).clicked() {
+                if theme::button_at(ui, cancel_r, Id::unique("ed-cancel"), t.cancel, Btn::Ghost, p).clicked() {
                     close = true;
                 }
                 if ed.id.is_some() {
@@ -958,7 +987,7 @@ impl App {
                     let resp = ui.interact(del_r, Id::unique("ed-del"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
                     let col = if resp.hovered() { kit::DANGER } else { kit::DANGER.gamma_multiply(0.85) };
                     kit::icon_trash(ui.painter(), pos2(del_r.left() + 10.0, del_r.center().y), col);
-                    ui.painter().text(pos2(del_r.left() + 24.0, del_r.center().y), Align2::LEFT_CENTER, "Удалить", theme::semi(13.5), col);
+                    ui.painter().text(pos2(del_r.left() + 24.0, del_r.center().y), Align2::LEFT_CENTER, t.delete, theme::semi(13.5), col);
                     if resp.clicked() {
                         delete = true;
                     }
@@ -977,12 +1006,12 @@ impl App {
         }
         if save {
             let Some(url) = urlx::extract_url(&ed.url) else {
-                ed.error = Some("Это не похоже на ссылку. Пример: https://example.com".into());
+                ed.error = Some(t.err_not_url.into());
                 return;
             };
             if let Some(other) = st.find_url(&url).filter(|o| Some(*o) != ed.id) {
-                let t = st.link(other).map(|l| l.title.clone()).unwrap_or_default();
-                ed.error = Some(format!("Такая ссылка уже есть: «{}»", win::ellipsize(&t, 50)));
+                let title = st.link(other).map(|l| l.title.clone()).unwrap_or_default();
+                ed.error = Some(t.err_duplicate.replace("{t}", &win::ellipsize(&title, 50)));
                 return;
             }
             let title = ed.title.trim().to_string();
@@ -1033,6 +1062,7 @@ impl App {
     }
 
     fn confirm_modal(&mut self, ctx: &egui::Context, st: &mut Store, p: &Pal) {
+        let t = strings::s();
         let Some(fid) = self.confirm_delete_folder else { return };
         let Some(name) = st.folder(fid).map(|f| f.name.clone()) else {
             self.confirm_delete_folder = None;
@@ -1046,12 +1076,8 @@ impl App {
             .frame(Frame::new().fill(p.card).stroke(Stroke::new(1.0, p.line)).corner_radius(20).inner_margin(Margin::symmetric(28, 24)))
             .show(ctx, |ui| {
                 ui.set_width(400.0);
-                ui.label(RichText::new(format!("Удалить папку «{name}»?")).font(theme::bold(19.0)).color(p.text));
-                let body = if n == 0 {
-                    "Папка пустая.".to_string()
-                } else {
-                    format!("{} останутся в библиотеке и переместятся в «Без папки».", plural(n, "ссылка", "ссылки", "ссылок"))
-                };
+                ui.label(RichText::new(t.delete_folder_q.replace("{name}", &name)).font(theme::bold(19.0)).color(p.text));
+                let body = if n == 0 { t.folder_is_empty.to_string() } else { t.links_move_out.replace("{links}", &pl(n, &t.links)) };
                 theme::hint(ui, &body, p);
                 ui.add_space(16.0);
                 let h = 40.0;
@@ -1061,11 +1087,11 @@ impl App {
                 let resp = ui.interact(del_r, Id::unique("cf-del"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
                 let fill = if resp.hovered() { theme::mix(kit::DANGER, Color32::BLACK, 0.1) } else { kit::DANGER };
                 ui.painter().rect_filled(del_r, 12.0, fill);
-                ui.painter().text(del_r.center(), Align2::CENTER_CENTER, "Удалить", theme::semi(14.5), Color32::WHITE);
+                ui.painter().text(del_r.center(), Align2::CENTER_CENTER, t.delete, theme::semi(14.5), Color32::WHITE);
                 if resp.clicked() {
                     confirm = true;
                 }
-                if theme::button_at(ui, cancel_r, Id::unique("cf-cancel"), "Отмена", Btn::Ghost, p).clicked() {
+                if theme::button_at(ui, cancel_r, Id::unique("cf-cancel"), t.cancel, Btn::Ghost, p).clicked() {
                     close = true;
                 }
             });
@@ -1085,6 +1111,7 @@ impl App {
     }
 
     fn toast(&mut self, ctx: &egui::Context, st: &mut Store, p: &Pal, now: f64) {
+        let tr = strings::s();
         let Some(t) = &self.toast else { return };
         let age = now - t.at;
         let life = 5.0;
@@ -1112,7 +1139,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.label(RichText::new(&t.text).font(theme::reg(13.5)).color(Color32::WHITE));
                             ui.add_space(6.0);
-                            let label = if t.undo.is_some() { Some("Вернуть") } else if t.edit.is_some() { Some("Изменить") } else { None };
+                            let label = if t.undo.is_some() { Some(tr.undo) } else if t.edit.is_some() { Some(tr.edit) } else { None };
                             if let Some(label) = label {
                                 let g = ui.painter().layout_no_wrap(label.into(), theme::semi(13.5), Color32::WHITE);
                                 let (r, resp) = ui.allocate_exact_size(g.size() + vec2(20.0, 12.0), Sense::click());
@@ -1163,7 +1190,7 @@ impl App {
             if let Some(text) = pasted {
                 match urlx::extract_url(&text) {
                     Some(url) => self.quick_save(st, &url, now),
-                    None => self.toast = Some(Toast { text: "В буфере обмена нет ссылки".into(), undo: None, edit: None, at: now }),
+                    None => self.toast = Some(Toast { text: strings::s().no_link_in_clipboard.into(), undo: None, edit: None, at: now }),
                 }
             }
         }
@@ -1187,7 +1214,7 @@ impl App {
         egui::CentralPanel::default()
             .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 32, right: 26, top: 22, bottom: 0 }))
             .show(ui, |ui| {
-                if let Some(err) = st.load_error.clone() {
+                if let Some(err) = st.load_error.clone().map(|e| strings::s().library_broken.replace("{e}", &e.detail).replace("{name}", &e.backup)) {
                     let r = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover()).0;
                     ui.painter().rect_filled(r, 10.0, kit::DANGER.gamma_multiply(0.15));
                     ui.painter().text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, win::ellipsize(&err, 120), theme::reg(13.0), kit::DANGER);
@@ -1203,7 +1230,7 @@ impl App {
                 }
             });
 
-        // Призрак перетаскиваемой ссылки у курсора.
+        // Ghost of the dragged link next to the cursor.
         if let Some(d) = DragAndDrop::payload::<LinkDrag>(&ctx)
             && let Some(pos) = ctx.pointer_interact_pos()
             && let Some(l) = st.link(d.0)
@@ -1223,7 +1250,7 @@ impl App {
     }
 }
 
-/// Карточка ссылки. Возвращает действие: open / copy / edit / delete / move.
+/// Link card. Returns the action: open / copy / edit / delete / move.
 fn link_card(
     ui: &mut Ui,
     l: &Link,
@@ -1233,6 +1260,7 @@ fn link_card(
     folders: &[(FolderId, String)],
     p: &Pal,
 ) -> Option<(&'static str, Option<Option<FolderId>>)> {
+    let t = strings::s();
     let w = ui.available_width();
     let pad = 14.0;
     let badge = 38.0;
@@ -1256,8 +1284,8 @@ fn link_card(
     if resp.drag_started() {
         resp.dnd_set_drag_payload(LinkDrag(l.id));
     }
-    // Не `resp.hovered()`: над кнопками действий наведение забирают сами кнопки,
-    // карточка перестаёт считаться наведённой, и кнопки исчезают до того, как по ним успеют щёлкнуть.
+    // Not `resp.hovered()`: over the action buttons the buttons take the hover themselves,
+    // the card stops counting as hovered and the buttons vanish before they can be clicked.
     let hovered = ui.rect_contains_pointer(rect) || resp.context_menu_opened();
     let mut out = None;
 
@@ -1269,14 +1297,14 @@ fn link_card(
     }
     painter.rect(rect, 14.0, fill, Stroke::new(1.0, stroke), StrokeKind::Inside);
 
-    // Значок сайта.
+    // Site badge.
     let domain = urlx::domain(&l.url);
     let br = Rect::from_min_size(rect.min + vec2(pad, 12.0), vec2(badge, badge));
     let bc = kit::badge_color(&domain);
     painter.rect_filled(br, 11.0, bc);
     painter.text(br.center(), Align2::CENTER_CENTER, kit::badge_letter(&domain), theme::bold(17.0), Color32::WHITE);
 
-    // Название и адрес.
+    // Title and address.
     let mut tj = highlighted(&l.title, q, theme::semi(14.5), p.text, p);
     tj.wrap = TextWrapping { max_width: text_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     let tg = painter.layout_job(tj);
@@ -1289,16 +1317,16 @@ fn link_card(
         painter.galley(rect.min + vec2(x0, 58.0), g, p.muted);
     }
 
-    // Справа: дата и папка, при наведении — кнопки.
+    // On the right: date and folder, buttons on hover.
     if hovered {
         let size = 30.0;
         let mut x = rect.right() - pad - size;
         let y = rect.top() + 11.0;
         let buttons: [(IconFn, &str, &'static str, bool); 4] = [
-            (kit::icon_trash, "Удалить", "delete", true),
-            (kit::icon_edit, "Изменить название, описание, папку", "edit", false),
-            (kit::icon_copy, "Копировать ссылку", "copy", false),
-            (kit::icon_external, "Открыть в браузере", "open", false),
+            (kit::icon_trash, t.delete, "delete", true),
+            (kit::icon_edit, t.edit_tip, "edit", false),
+            (kit::icon_copy, t.copy_link, "copy", false),
+            (kit::icon_external, t.open_browser, "open", false),
         ];
         for (icon, tip, act, danger) in buttons {
             let r = Rect::from_min_size(pos2(x, y), vec2(size, size));
@@ -1324,21 +1352,21 @@ fn link_card(
     let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
     resp.context_menu(|ui| {
         ui.set_min_width(230.0);
-        if kit::menu_item(ui, "Открыть в браузере", Some(kit::icon_external), false, false, p).clicked() {
+        if kit::menu_item(ui, t.open_browser, Some(kit::icon_external), false, false, p).clicked() {
             out = Some(("open", None));
             ui.close();
         }
-        if kit::menu_item(ui, "Копировать ссылку", Some(kit::icon_copy), false, false, p).clicked() {
+        if kit::menu_item(ui, t.copy_link, Some(kit::icon_copy), false, false, p).clicked() {
             out = Some(("copy", None));
             ui.close();
         }
-        if kit::menu_item(ui, "Изменить…", Some(kit::icon_edit), false, false, p).clicked() {
+        if kit::menu_item(ui, t.edit_menu, Some(kit::icon_edit), false, false, p).clicked() {
             out = Some(("edit", None));
             ui.close();
         }
         kit::menu_separator(ui, p);
-        ui.label(RichText::new("ПЕРЕМЕСТИТЬ В").font(theme::semi(11.0)).color(p.muted));
-        if kit::menu_item(ui, "Без папки", Some(kit::icon_inbox), l.folder.is_none(), false, p).clicked() {
+        ui.label(RichText::new(t.move_to).font(theme::semi(11.0)).color(p.muted));
+        if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), l.folder.is_none(), false, p).clicked() {
             out = Some(("move", Some(None)));
             ui.close();
         }
@@ -1349,7 +1377,7 @@ fn link_card(
             }
         }
         kit::menu_separator(ui, p);
-        if kit::menu_item(ui, "Удалить", Some(kit::icon_trash), false, true, p).clicked() {
+        if kit::menu_item(ui, t.delete, Some(kit::icon_trash), false, true, p).clicked() {
             out = Some(("delete", None));
             ui.close();
         }
@@ -1357,7 +1385,7 @@ fn link_card(
     out
 }
 
-/// Текст с подсветкой совпадений поиска.
+/// Text with the search matches highlighted.
 fn highlighted(text: &str, q: &Query, font: egui::FontId, color: Color32, p: &Pal) -> LayoutJob {
     let mut job = LayoutJob::default();
     let normal = TextFormat { font_id: font.clone(), color, ..Default::default() };
@@ -1383,7 +1411,7 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         }
 
-        // Закрытие окна — в трей.
+        // Closing the window sends it to the tray.
         if ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
@@ -1392,7 +1420,7 @@ impl eframe::App for App {
                 st.lib.settings.tray_hint_shown = true;
                 st.touch();
                 drop(st);
-                win::notify("Save URLs работает в трее", "Сохраняйте ссылки щелчком по значку или Ctrl+Alt+S. Выйти — правой кнопкой по значку.");
+                win::notify(strings::s().tray_title, strings::s().tray_body);
             }
         }
 
@@ -1425,15 +1453,15 @@ impl eframe::App for App {
         if let Some(After::Export) = self.after.take() {
             let html = bookmarks_html(&store.lock().unwrap());
             if let Some(path) = rfd::FileDialog::new()
-                .set_title("Экспорт закладок")
+                .set_title(strings::s().export_dialog)
                 .set_file_name("save-urls-bookmarks.html")
-                .add_filter("Закладки HTML", &["html"])
+                .add_filter(strings::s().export_filter, &["html"])
                 .save_file()
             {
                 let ok = std::fs::write(&path, html).is_ok();
                 let now = ui.input(|i| i.time);
                 self.toast = Some(Toast {
-                    text: if ok { "Закладки сохранены".into() } else { "Не удалось записать файл".into() },
+                    text: if ok { strings::s().bookmarks_saved.into() } else { strings::s().write_failed.into() },
                     undo: None,
                     edit: None,
                     at: now,

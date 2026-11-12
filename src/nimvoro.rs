@@ -1,9 +1,21 @@
-//! NIMVORO: проверка обновлений через GitHub Releases и передача обновления лаунчеру.
+//! NIMVORO shared module: update check via GitHub Releases and hand-off of the update to the launcher.
 //!
-//! Общий модуль для всех Rust-утилит набора, копируется без изменений.
-//! Не зависит от egui и сторонних HTTP-библиотек: запрос делает встроенный в Windows `curl.exe`.
-//! Контракт описан в `nimvoro/docs/ADDING_A_TOOL.md`.
+//! Copied byte for byte into every Rust tool of the suite. Needs no egui and no HTTP crate:
+//! the request is made by `curl.exe`, which ships with Windows. The contract is described in
+//! `nimvoro/docs/ADDING_A_TOOL.md`.
+//!
+//! # Usage
+//!
+//! ```ignore
+//! let updater = Updater::new("random-wheel", "GrigoryyKach/random-wheel", env!("CARGO_PKG_VERSION"));
+//! updater.check(move || ctx.request_repaint());       // background check
+//! updater.status_text(lang)                           // localized status line for Settings
+//! if let UpdateState::Available { version, .. } = updater.state() { /* banner */ }
+//! if updater.apply() { /* update handed to the launcher: save and close the window */ }
+//! let t = nimvoro::strings(lang);                     // shared captions: t.updates, t.check_now, ...
+//! ```
 
+use crate::i18n::Lang;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -13,7 +25,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum UpdateState {
-    /// Проверка ещё не запускалась.
+    /// No check has been started yet.
     Idle,
     Checking,
     UpToDate,
@@ -23,9 +35,9 @@ pub enum UpdateState {
 
 #[derive(Clone)]
 pub struct Updater {
-    /// id утилиты в каталоге NIMVORO.
+    /// Tool id in the NIMVORO catalog.
     pub id: &'static str,
-    /// `owner/repo` на GitHub.
+    /// `owner/repo` on GitHub.
     pub repo: &'static str,
     pub current: &'static str,
     state: Arc<Mutex<UpdateState>>,
@@ -44,7 +56,7 @@ impl Updater {
         self.state() == UpdateState::Checking
     }
 
-    /// Фоновая проверка. `on_done` вызывается из фонового потока (например, `ctx.request_repaint()`).
+    /// Background check. `on_done` runs on the worker thread (e.g. `ctx.request_repaint()`).
     pub fn check(&self, on_done: impl FnOnce() + Send + 'static) {
         if self.is_checking() {
             return;
@@ -70,8 +82,8 @@ impl Updater {
         }
     }
 
-    /// Запускает обновление: через лаунчер, если он установлен, иначе открывает страницу релиза.
-    /// Возвращает `true`, если обновление передано лаунчеру и утилите пора завершиться.
+    /// Starts the update through the launcher if it is installed, otherwise opens the release page.
+    /// Returns `true` when the update was handed to the launcher and the tool should exit.
     pub fn apply(&self) -> bool {
         if let Some(exe) = launcher_path() {
             let spawned = Command::new(&exe).args(["--update", self.id]).spawn().is_ok();
@@ -87,19 +99,85 @@ impl Updater {
         false
     }
 
-    /// Текст для строки состояния в настройках.
-    pub fn status_text(&self) -> String {
+    /// Localized text for the status line in Settings.
+    pub fn status_text(&self, lang: Lang) -> String {
+        let t = strings(lang);
         match self.state() {
-            UpdateState::Idle => format!("Установлена версия {}", self.current),
-            UpdateState::Checking => "Проверяем обновления…".into(),
-            UpdateState::UpToDate => format!("Версия {} — последняя", self.current),
-            UpdateState::Available { version, .. } => format!("Доступна версия {version}"),
-            UpdateState::Failed => "Не удалось проверить обновления".into(),
+            UpdateState::Idle => t.installed.replace("{v}", self.current),
+            UpdateState::Checking => t.checking.to_string(),
+            UpdateState::UpToDate => t.latest.replace("{v}", self.current),
+            UpdateState::Available { version, .. } => t.available.replace("{v}", &version),
+            UpdateState::Failed => t.failed.to_string(),
         }
     }
 }
 
-/// Путь к NIMVORO.exe, который лаунчер записывает в `%APPDATA%\NIMVORO\launcher.json`.
+/// Captions shared by all tools. `{v}` is replaced with a version number.
+pub struct Strings {
+    pub updates: &'static str,
+    pub check_on_start: &'static str,
+    pub check_on_start_hint: &'static str,
+    pub check_now: &'static str,
+    pub update_btn: &'static str,
+    pub installed: &'static str,
+    pub checking: &'static str,
+    pub latest: &'static str,
+    pub available: &'static str,
+    pub failed: &'static str,
+    pub you_have: &'static str,
+}
+
+const EN: Strings = Strings {
+    updates: "Updates",
+    check_on_start: "Check on startup",
+    check_on_start_hint: "Look for new versions on GitHub and update through NIMVORO",
+    check_now: "Check",
+    update_btn: "Update",
+    installed: "Version {v} installed",
+    checking: "Checking for updates…",
+    latest: "Version {v} is the latest",
+    available: "Version {v} is available",
+    failed: "Could not check for updates",
+    you_have: "You have {v}",
+};
+
+const RU: Strings = Strings {
+    updates: "Обновления",
+    check_on_start: "Проверять при запуске",
+    check_on_start_hint: "Узнавать о новых версиях на GitHub и обновляться через NIMVORO",
+    check_now: "Проверить",
+    update_btn: "Обновить",
+    installed: "Установлена версия {v}",
+    checking: "Проверяем обновления…",
+    latest: "Версия {v} — последняя",
+    available: "Доступна версия {v}",
+    failed: "Не удалось проверить обновления",
+    you_have: "У вас {v}",
+};
+
+const UK: Strings = Strings {
+    updates: "Оновлення",
+    check_on_start: "Перевіряти під час запуску",
+    check_on_start_hint: "Дізнаватися про нові версії на GitHub і оновлюватися через NIMVORO",
+    check_now: "Перевірити",
+    update_btn: "Оновити",
+    installed: "Встановлено версію {v}",
+    checking: "Перевіряємо оновлення…",
+    latest: "Версія {v} — остання",
+    available: "Доступна версія {v}",
+    failed: "Не вдалося перевірити оновлення",
+    you_have: "У вас {v}",
+};
+
+pub fn strings(lang: Lang) -> &'static Strings {
+    match lang {
+        Lang::En => &EN,
+        Lang::Ru => &RU,
+        Lang::Uk => &UK,
+    }
+}
+
+/// Path to NIMVORO.exe, which the launcher records in `%APPDATA%\NIMVORO\launcher.json`.
 pub fn launcher_path() -> Option<PathBuf> {
     let dir = std::env::var_os("APPDATA")?;
     let text = std::fs::read_to_string(PathBuf::from(dir).join("NIMVORO").join("launcher.json")).ok()?;
@@ -137,7 +215,7 @@ fn parse(v: &str) -> Vec<u64> {
         .collect()
 }
 
-/// `true`, если `candidate` новее `current` (semver без pre-release).
+/// `true` if `candidate` is newer than `current` (semver without pre-release).
 pub fn is_newer(candidate: &str, current: &str) -> bool {
     let (a, b) = (parse(candidate), parse(current));
     for i in 0..a.len().max(b.len()) {

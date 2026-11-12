@@ -1,5 +1,5 @@
-//! Всё, что связано с Windows напрямую: значок в трее (свой поток и своё окно сообщений),
-//! буфер обмена, горячая клавиша, уведомления, автозапуск, открытие ссылок, загрузка заголовков страниц.
+//! Everything that talks to Windows directly: the tray icon (own thread and own message window),
+//! clipboard, hotkey, notifications, autostart, opening links, downloading page titles.
 
 #![allow(clippy::missing_safety_doc)]
 
@@ -27,6 +27,21 @@ use crate::store::{self, Added, LinkId};
 const CF_UNICODETEXT: u32 = 13;
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 const TRAY_CLASS: &str = "SaveUrls.TrayWindow";
+
+/// Empty for the installed copy. A portable copy (a `library.json` next to the exe) gets its own tag,
+/// so it never collides with the installed program that may be running at the same time.
+fn instance_tag() -> String {
+    if !store::is_portable() {
+        return String::new();
+    }
+    let dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.display().to_string().to_lowercase())).unwrap_or_default();
+    let hash = dir.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    format!(".{hash:016x}")
+}
+
+fn tray_class() -> String {
+    format!("{TRAY_CLASS}{}", instance_tag())
+}
 const WM_TRAY: u32 = WM_APP + 1;
 pub const WM_APP_SHOW: u32 = WM_APP + 2;
 pub const WM_APP_QUIT: u32 = WM_APP + 3;
@@ -54,17 +69,17 @@ fn copy_wide(dst: &mut [u16], s: &str) {
     dst[n] = 0;
 }
 
-/// Обрезает строку до `max` символов с многоточием.
+/// Cuts a string to `max` characters with an ellipsis.
 pub fn ellipsize(s: &str, max: usize) -> String {
     if s.chars().count() <= max { s.to_string() } else { s.chars().take(max.saturating_sub(1)).collect::<String>() + "…" }
 }
 
-// ───────────────────────── связь окна и трея ─────────────────────────
+// ───────────────────────── window and tray hand-off ─────────────────────────
 
 pub enum Event {
-    /// Показать окно.
+    /// Show the window.
     Show,
-    /// Показать окно и открыть ссылку на редактирование.
+    /// Show the window and open a link for editing.
     Edit(LinkId),
 }
 
@@ -72,7 +87,7 @@ pub struct Hub {
     pub store: store::Shared,
     pub ctx: egui::Context,
     pub events: Mutex<Vec<Event>>,
-    /// Ссылка, которая сейчас лежит в буфере обмена (для подсказки в окне и трее).
+    /// The link currently in the clipboard (for the hint in the window and the tray).
     pub clip_url: Mutex<Option<String>>,
 }
 
@@ -96,14 +111,14 @@ pub fn post_tray(msg: u32) {
     }
 }
 
-/// Один экземпляр на пользователя. Если программа уже запущена — показываем её окно и выходим.
+/// One instance per user. If the program is already running, show its window and exit.
 pub fn single_instance() -> bool {
     unsafe {
-        let name = wide("Local\\SaveUrls.SingleInstance");
+        let name = wide(&format!("Local\\SaveUrls.SingleInstance{}", instance_tag()));
         let h = CreateMutexW(null(), 0, name.as_ptr());
         if !h.is_null() && GetLastError() == ERROR_ALREADY_EXISTS {
-            let class = wide(TRAY_CLASS);
-            // Трей другого экземпляра мог ещё не успеть создаться.
+            let class = wide(&tray_class());
+            // The other instance may not have created its tray window yet.
             for _ in 0..20 {
                 let other = FindWindowW(class.as_ptr(), null());
                 if !other.is_null() {
@@ -114,7 +129,7 @@ pub fn single_instance() -> bool {
             }
             return false;
         }
-        // Дескриптор мьютекса держим до конца процесса.
+        // The mutex handle is kept until the process ends.
         true
     }
 }
@@ -130,11 +145,49 @@ fn hub() -> &'static Arc<Hub> {
     HUB.get().expect("hub")
 }
 
-// ───────────────────────── значок ─────────────────────────
+// ───────────────────────── icon ─────────────────────────
+
+/// `assets/icon.png` scaled to `size` x `size` (area average), RGBA with straight alpha.
+fn png_rgba(size: u32) -> Vec<u8> {
+    let n = size as usize;
+    let Ok(src) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) else { return vec![0; n * n * 4] };
+    let (sw, sh) = (src.width as usize, src.height as usize);
+    let mut out = Vec::with_capacity(n * n * 4);
+    for y in 0..n {
+        let (y0, y1) = (y * sh / n, ((y + 1) * sh / n).max(y * sh / n + 1).min(sh));
+        for x in 0..n {
+            let (x0, x1) = (x * sw / n, ((x + 1) * sw / n).max(x * sw / n + 1).min(sw));
+            let (mut r, mut g, mut b, mut a, mut cnt) = (0u64, 0u64, 0u64, 0u64, 0u64);
+            for sy in y0..y1 {
+                for sx in x0..x1 {
+                    let i = (sy * sw + sx) * 4;
+                    let al = src.rgba[i + 3] as u64;
+                    r += src.rgba[i] as u64 * al;
+                    g += src.rgba[i + 1] as u64 * al;
+                    b += src.rgba[i + 2] as u64 * al;
+                    a += al;
+                    cnt += 1;
+                }
+            }
+            if a == 0 || cnt == 0 {
+                out.extend_from_slice(&[0, 0, 0, 0]);
+            } else {
+                out.extend_from_slice(&[(r / a) as u8, (g / a) as u8, (b / a) as u8, (a / cnt) as u8]);
+            }
+        }
+    }
+    out
+}
 
 unsafe fn make_icon(size: u32) -> HICON {
     unsafe {
-        let rgba = crate::icon::icon_rgba(size);
+        // The exe carries the icon resource (build.rs embeds assets/icon.ico under id 1): pick the best size from it.
+        let res = LoadImageW(GetModuleHandleW(null()), 1usize as *const u16, IMAGE_ICON, size as i32, size as i32, 0);
+        if !res.is_null() {
+            return res as HICON;
+        }
+        // No resource (for example a build without windres/rc.exe): draw from the PNG.
+        let rgba = png_rgba(size);
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
         bmi.bmiHeader.biWidth = size as i32;
@@ -191,8 +244,8 @@ fn tip_text() -> String {
     let clip = hub().clip_url.lock().unwrap().clone();
     let click = hub().store.lock().unwrap().lib.settings.click;
     match (clip, click) {
-        (Some(u), store::ClickAction::Save) => format!("Save URLs\nКлик — сохранить {}", ellipsize(&crate::urlx::pretty(&u), 70)),
-        _ => "Save URLs — библиотека ссылок".into(),
+        (Some(u), store::ClickAction::Save) => crate::strings::s().tip_click.replace("{u}", &ellipsize(&crate::urlx::pretty(&u), 70)),
+        _ => crate::strings::s().tip_idle.into(),
     }
 }
 
@@ -218,7 +271,7 @@ unsafe fn update_tip(hwnd: HWND) {
     }
 }
 
-/// Уведомление Windows от значка в трее.
+/// Windows notification from the tray icon.
 unsafe fn balloon(hwnd: HWND, title: &str, text: &str) {
     unsafe {
         let mut n = nid(hwnd);
@@ -231,7 +284,7 @@ unsafe fn balloon(hwnd: HWND, title: &str, text: &str) {
     }
 }
 
-/// Уведомление от значка в трее (можно вызывать из любого потока).
+/// Notification from the tray icon (may be called from any thread).
 pub fn notify(title: &str, text: &str) {
     let h = TRAY_HWND.load(Ordering::SeqCst);
     if h != 0 {
@@ -240,7 +293,7 @@ pub fn notify(title: &str, text: &str) {
     }
 }
 
-// ───────────────────────── буфер обмена ─────────────────────────
+// ───────────────────────── clipboard ─────────────────────────
 
 pub unsafe fn clipboard_text(owner: HWND) -> Option<String> {
     unsafe {
@@ -291,7 +344,7 @@ fn refresh_clip(hwnd: HWND) {
     }
 }
 
-// ───────────────────────── сохранение из трея ─────────────────────────
+// ───────────────────────── saving from the tray ─────────────────────────
 
 unsafe fn save_from_clipboard(hwnd: HWND, open_if_empty: bool) {
     unsafe {
@@ -302,7 +355,8 @@ unsafe fn save_from_clipboard(hwnd: HWND, open_if_empty: bool) {
             if open_if_empty {
                 h.send(Event::Show);
             } else if h.store.lock().unwrap().lib.settings.notify {
-                balloon(hwnd, "В буфере нет ссылки", "Скопируйте адрес страницы и попробуйте ещё раз");
+                let t = crate::strings::s();
+                balloon(hwnd, t.balloon_no_link, t.balloon_no_link_hint);
             }
             return;
         };
@@ -321,8 +375,9 @@ unsafe fn save_from_clipboard(hwnd: HWND, open_if_empty: bool) {
             Added::New(id) => {
                 LAST_SAVED.store(id, Ordering::SeqCst);
                 if notify {
-                    let text = format!("{}\n{} · нажмите, чтобы добавить описание", ellipsize(&crate::urlx::pretty(&url), 80), folder);
-                    balloon(hwnd, "Ссылка сохранена", &text);
+                    let t = crate::strings::s();
+                    let text = format!("{}\n{} · {}", ellipsize(&crate::urlx::pretty(&url), 80), folder, t.balloon_saved_hint);
+                    balloon(hwnd, t.balloon_saved, &text);
                 }
                 if fetch {
                     fetch_title_async(h.store.clone(), h.ctx.clone(), id, url, Some(hwnd as isize));
@@ -331,14 +386,14 @@ unsafe fn save_from_clipboard(hwnd: HWND, open_if_empty: bool) {
             Added::Exists(id) => {
                 LAST_SAVED.store(id, Ordering::SeqCst);
                 if notify {
-                    balloon(hwnd, "Уже в библиотеке", &format!("{}\n{}", ellipsize(&title, 80), folder));
+                    balloon(hwnd, crate::strings::s().balloon_exists, &format!("{}\n{}", ellipsize(&title, 80), folder));
                 }
             }
         }
     }
 }
 
-/// Загружает заголовок страницы в фоне и подставляет его вместо временного названия.
+/// Downloads the page title in the background and uses it instead of the temporary title.
 pub fn fetch_title_async(store: store::Shared, ctx: egui::Context, id: LinkId, url: String, _tray: Option<isize>) {
     std::thread::spawn(move || {
         let Some(title) = fetch_title(&url) else { return };
@@ -360,7 +415,7 @@ pub fn fetch_title(url: &str) -> Option<String> {
     crate::urlx::parse_title(&html)
 }
 
-// ───────────────────────── окно трея ─────────────────────────
+// ───────────────────────── tray window ─────────────────────────
 
 unsafe fn apply_hotkey(hwnd: HWND) {
     unsafe {
@@ -395,31 +450,32 @@ unsafe fn show_menu(hwnd: HWND) {
             (v.into_iter().take(8).map(|l| (l.title.clone(), l.url.clone())).collect(), exists)
         };
 
+        let t = crate::strings::s();
         let menu = CreatePopupMenu();
         let save_label = match &clip {
-            Some(u) if exists => format!("Уже сохранено\t{}", ellipsize(&crate::urlx::pretty(u), 38)),
-            Some(u) => format!("Сохранить ссылку\t{}", ellipsize(&crate::urlx::pretty(u), 38)),
-            None => "Сохранить ссылку — в буфере нет ссылки".into(),
+            Some(u) if exists => format!("{}\t{}", t.menu_exists, ellipsize(&crate::urlx::pretty(u), 38)),
+            Some(u) => format!("{}\t{}", t.menu_save, ellipsize(&crate::urlx::pretty(u), 38)),
+            None => t.menu_save_empty.into(),
         };
         let flags = if clip.is_some() && !exists { MF_STRING } else { MF_STRING | MF_GRAYED };
         AppendMenuW(menu, flags, ID_SAVE, wide(&save_label).as_ptr());
-        AppendMenuW(menu, MF_STRING, ID_OPEN, wide("Открыть библиотеку").as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_OPEN, wide(t.menu_open).as_ptr());
         let sub = CreatePopupMenu();
         for (i, (title, _)) in recent.iter().enumerate() {
             let t = ellipsize(title, 50).replace('&', "&&");
             AppendMenuW(sub, MF_STRING, ID_RECENT + i, wide(&t).as_ptr());
         }
         if recent.is_empty() {
-            AppendMenuW(sub, MF_STRING | MF_GRAYED, 0, wide("Пока пусто").as_ptr());
+            AppendMenuW(sub, MF_STRING | MF_GRAYED, 0, wide(t.menu_none).as_ptr());
         }
-        AppendMenuW(menu, MF_POPUP, sub as usize, wide("Недавние").as_ptr());
+        AppendMenuW(menu, MF_POPUP, sub as usize, wide(t.menu_recent).as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
-        AppendMenuW(menu, MF_STRING, ID_QUIT, wide("Выход").as_ptr());
+        AppendMenuW(menu, MF_STRING, ID_QUIT, wide(t.menu_quit).as_ptr());
         SetMenuDefaultItem(menu, if clip.is_some() && !exists { ID_SAVE as u32 } else { ID_OPEN as u32 }, 0);
 
         let mut pt = POINT { x: 0, y: 0 };
         GetCursorPos(&mut pt);
-        // Без этого меню не закрывается по щелчку мимо.
+        // Without this the menu does not close when clicking elsewhere.
         SetForegroundWindow(hwnd);
         let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, null()) as usize;
         PostMessageW(hwnd, WM_NULL, 0, 0);
@@ -458,7 +514,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 0
             }
             WM_CLIPBOARDUPDATE => {
-                // Читаем не сразу: программа, положившая данные, может ещё работать с буфером.
+                // Do not read at once: the program that put the data there may still be using the clipboard.
                 SetTimer(hwnd, CLIP_TIMER, 150, None);
                 0
             }
@@ -468,7 +524,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 0
             }
             WM_HOTKEY if wp as i32 == HOTKEY_ID => {
-                // Дать отпустить клавиши и приложению — дописать буфер.
+                // Give the user time to release the keys and the source app time to finish the clipboard.
                 std::thread::sleep(std::time::Duration::from_millis(60));
                 save_from_clipboard(hwnd, false);
                 0
@@ -484,7 +540,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 0
             }
             _ if msg == TASKBAR_CREATED.load(Ordering::SeqCst) && msg != 0 => {
-                // Проводник перезапустился — значок нужно добавить заново.
+                // Explorer restarted: the icon must be added again.
                 add_icon(hwnd);
                 0
             }
@@ -496,7 +552,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 unsafe fn tray_main() {
     unsafe {
         let hinst = GetModuleHandleW(null());
-        let class = wide(TRAY_CLASS);
+        let class = wide(&tray_class());
         let mut wc: WNDCLASSW = std::mem::zeroed();
         wc.lpfnWndProc = Some(wndproc);
         wc.hInstance = hinst;
@@ -522,9 +578,9 @@ unsafe fn tray_main() {
     }
 }
 
-// ───────────────────────── окно приложения ─────────────────────────
+// ───────────────────────── app window ─────────────────────────
 
-/// Вывести окно на передний план (после показа из трея).
+/// Brings the window to the foreground (after showing it from the tray).
 pub fn bring_to_front(hwnd: isize) {
     if hwnd == 0 {
         return;
@@ -538,9 +594,9 @@ pub fn bring_to_front(hwnd: isize) {
     }
 }
 
-// ───────────────────────── оболочка ─────────────────────────
+// ───────────────────────── shell ─────────────────────────
 
-/// Открывает ссылку в браузере по умолчанию. Только веб-адреса — никаких локальных программ.
+/// Opens a link in the default browser. Web addresses only: no local programs.
 pub fn open_url(url: &str) {
     let url = url.trim();
     let lower = url.to_ascii_lowercase();
@@ -563,7 +619,7 @@ pub fn open_folder(path: &std::path::Path) {
     }
 }
 
-// ───────────────────────── автозапуск ─────────────────────────
+// ───────────────────────── autostart ─────────────────────────
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Save URLs";
@@ -615,7 +671,7 @@ pub fn set_autostart(on: bool) -> bool {
     }
 }
 
-// ───────────────────────── время ─────────────────────────
+// ───────────────────────── time ─────────────────────────
 
 pub struct LocalTime {
     pub year: i32,
@@ -650,7 +706,7 @@ impl Drop for Handle {
     }
 }
 
-/// GET через WinHTTP (системные прокси и сертификаты). Возвращает тело (не больше `max` байт) и Content-Type.
+/// GET through WinHTTP (system proxies and certificates). Returns the body (at most `max` bytes) and the Content-Type.
 pub fn http_get(url: &str, max: usize) -> Option<(Vec<u8>, String)> {
     unsafe {
         let agent = wide("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36");
@@ -682,7 +738,7 @@ pub fn http_get(url: &str, max: usize) -> Option<(Vec<u8>, String)> {
         }
         if !c.lpszExtraInfo.is_null() {
             let extra = std::slice::from_raw_parts(c.lpszExtraInfo, c.dwExtraInfoLength as usize);
-            // Якорь (#…) серверу не отправляется.
+            // The fragment (#...) is never sent to the server.
             let end = extra.iter().position(|&u| u == '#' as u16).unwrap_or(extra.len());
             path.extend_from_slice(&extra[..end]);
         }
@@ -700,7 +756,12 @@ pub fn http_get(url: &str, max: usize) -> Option<(Vec<u8>, String)> {
         if req.0.is_null() {
             return None;
         }
-        let headers = wide("Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.5\r\nAccept-Language: ru,en;q=0.8\r\n");
+        let accept_language = match crate::strings::lang() {
+            crate::i18n::Lang::En => "en",
+            crate::i18n::Lang::Ru => "ru,en;q=0.8",
+            crate::i18n::Lang::Uk => "uk,en;q=0.8",
+        };
+        let headers = wide(&format!("Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.5\r\nAccept-Language: {accept_language}\r\n"));
         if WinHttpSendRequest(req.0, headers.as_ptr(), u32::MAX, null(), 0, 0, 0) == 0 {
             return None;
         }
@@ -739,7 +800,7 @@ pub fn http_get(url: &str, max: usize) -> Option<(Vec<u8>, String)> {
                 break;
             }
             body.extend_from_slice(&buf[..read as usize]);
-            // Заголовок обычно в начале — дальше читать незачем.
+            // The title is usually near the top, so there is no need to read further.
             if body.len() >= max || contains_ci(&body, b"</title") {
                 break;
             }
@@ -754,7 +815,7 @@ fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// Ходит в интернет, поэтому запускается вручную: `cargo test -- --ignored`.
+    /// Goes to the internet, so it is run by hand: `cargo test -- --ignored`.
     #[test]
     #[ignore]
     fn fetches_real_titles() {
@@ -762,7 +823,7 @@ mod tests {
         assert!(t.contains("Rust"), "{t}");
         let t = super::fetch_title("https://github.com/emilk/egui").expect("title");
         assert!(t.contains("egui"), "{t}");
-        // Редирект http → https.
+        // Redirect http -> https.
         assert!(super::fetch_title("http://example.com").is_some_and(|t| t.contains("Example")));
     }
 }

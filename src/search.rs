@@ -1,7 +1,7 @@
-//! Поиск по библиотеке: совпадения в названии, описании и адресе,
-//! опечатки, пропущенные буквы и запрос, набранный не в той раскладке («пшерги» → «github»).
+//! Library search: matches in the title, description and address,
+//! typos, skipped letters and a query typed in the wrong keyboard layout ("пшерги" -> "github").
 
-/// Нижний регистр, «ё» = «е».
+/// Lower case, with "ё" treated as "е".
 fn norm_char(c: char) -> char {
     let l = c.to_lowercase().next().unwrap_or(c);
     if l == 'ё' { 'е' } else { l }
@@ -14,7 +14,7 @@ fn norm(s: &str) -> Vec<char> {
 const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
 const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюё";
 
-/// Тот же запрос в другой раскладке, если в нём есть что менять.
+/// The same query in the other layout (Russian/English), if there is anything to convert.
 pub fn swap_layout(s: &str) -> Option<String> {
     let en: Vec<char> = EN.chars().collect();
     let ru: Vec<char> = RU.chars().collect();
@@ -38,7 +38,7 @@ pub fn swap_layout(s: &str) -> Option<String> {
 }
 
 pub struct Query {
-    /// Для каждого слова запроса: варианты (как набрано, в другой раскладке).
+    /// For every query word: variants (as typed, in the other layout).
     tokens: Vec<Vec<Vec<char>>>,
 }
 
@@ -64,7 +64,7 @@ impl Query {
         self.tokens.is_empty()
     }
 
-    /// Оценка совпадения или `None`, если хотя бы одно слово запроса нигде не нашлось.
+    /// Match score, or `None` if at least one query word is found nowhere.
     pub fn score(&self, title: &str, desc: &str, url: &str) -> Option<i32> {
         let fields = [(norm(title), 100.0), (norm(url), 70.0), (norm(desc), 55.0)];
         let mut total = 0;
@@ -84,7 +84,7 @@ impl Query {
         Some(total)
     }
 
-    /// Байтовые диапазоны точных совпадений в `text` — для подсветки.
+    /// Byte ranges of exact matches in `text`, for highlighting.
     pub fn highlights(&self, text: &str) -> Vec<(usize, usize)> {
         let chars: Vec<(usize, char)> = text.char_indices().map(|(i, c)| (i, norm_char(c))).collect();
         let hay: Vec<char> = chars.iter().map(|c| c.1).collect();
@@ -146,8 +146,8 @@ fn find(hay: &[char], needle: &[char]) -> Option<usize> {
     (0..=hay.len() - needle.len()).find(|&i| hay[i..i + needle.len()] == *needle)
 }
 
-/// Буквы запроса встречаются по порядку и недалеко друг от друга: «gthb» в «github».
-/// Возвращает 0.5…1.0 — чем плотнее, тем больше.
+/// The query letters occur in order and close to each other: "gthb" in "github".
+/// Returns 0.5..1.0: the denser the match, the higher.
 fn subsequence(hay: &[char], t: &[char]) -> Option<f32> {
     let mut best: Option<usize> = None;
     for start in 0..hay.len() {
@@ -205,7 +205,7 @@ mod tests {
         assert!(s("гуи", "", "Простой ГУИ", "example.com").is_some());
         assert!(s("emilk", "x", "", "github.com/emilk/egui").is_some());
         assert!(s("нет", "x", "y", "z.com").is_none());
-        // Совпадение в названии важнее, чем в адресе.
+        // A match in the title matters more than one in the address.
         assert!(s("rust", "Rust book", "", "a.com").unwrap() > s("rust", "Book", "", "rust.org").unwrap());
     }
 

@@ -1,12 +1,51 @@
-//! Палитра и компоненты в стиле Smart Switcher (src/settings/styles.css):
-//! те же цвета, радиусы, переключатели, кнопки и заголовки секций.
+//! NIMVORO shared module: palette (light and dark), fonts and widgets in the Smart Switcher style
+//! (same colours, radii, switches, buttons and section headings).
+//!
+//! Copied byte for byte into every Rust (egui) tool of the suite.
+//!
+//! # Usage
+//!
+//! ```ignore
+//! // Once, in the app constructor (mode comes from the config, `ThemeMode::System` by default):
+//! theme::install(&cc.egui_ctx, cfg.theme);
+//! // After the user changes the setting (System follows Windows live, nothing else to do):
+//! theme::apply(ctx, mode);
+//! // Every frame: pick the palette matching the active egui theme.
+//! let p = Pal::of(ui.visuals().dark_mode);
+//! ```
+//!
+//! Widgets (`button`, `switch`, `slider`, `pill`, `gradient_button`, `logo`, `caps`, `hint`, `divider`)
+//! take a `&Pal` and render correctly in both themes. `ThemeMode` serialises as `system`/`light`/`dark`.
 
 use eframe::egui::{
     self, Align2, Color32, ColorImage, CornerRadius, CursorIcon, FontData, FontDefinitions, FontFamily, FontId, Id,
     Painter, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, TextStyle, TextureHandle, TextureOptions, Theme,
     Ui, Vec2, epaint::RectShape, epaint::Shadow, pos2, text::LayoutJob, text::TextFormat, vec2,
 };
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// Theme setting stored in the app config (`system`, `light`, `dark`).
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeMode {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemeMode {
+    pub const ALL: [ThemeMode; 3] = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark];
+
+    fn preference(self) -> egui::ThemePreference {
+        match self {
+            ThemeMode::System => egui::ThemePreference::System,
+            ThemeMode::Light => egui::ThemePreference::Light,
+            ThemeMode::Dark => egui::ThemePreference::Dark,
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 pub struct Pal {
@@ -68,7 +107,7 @@ impl Pal {
     }
 }
 
-/// Линейное смешивание двух цветов (premultiplied), t ∈ [0, 1].
+/// Linear blend of two colours (premultiplied), t in [0, 1].
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
     let (a, b) = (a.to_array(), b.to_array());
@@ -76,7 +115,7 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgba_premultiplied(f(0), f(1), f(2), f(3))
 }
 
-// ───────────────────────── шрифты ─────────────────────────
+// ───────────────────────── fonts ─────────────────────────
 
 pub fn reg(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional)
@@ -88,8 +127,8 @@ pub fn bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("bold".into()))
 }
 
-/// Segoe UI (обычный, полужирный, жирный), как в Smart Switcher,
-/// плюс Segoe UI Symbol/Emoji, чтобы значки не превращались в квадраты.
+/// Segoe UI (regular, semibold, bold) as in Smart Switcher,
+/// plus Segoe UI Symbol/Emoji so icons do not turn into squares.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     let dir = std::path::Path::new(r"C:\Windows\Fonts");
@@ -164,9 +203,10 @@ fn visuals(p: &Pal) -> egui::Visuals {
     v
 }
 
-pub fn install(ctx: &egui::Context) {
+/// Installs fonts, both palettes and the base spacing, then applies `mode`.
+pub fn install(ctx: &egui::Context, mode: ThemeMode) {
     install_fonts(ctx);
-    ctx.set_theme(egui::ThemePreference::System);
+    apply(ctx, mode);
     ctx.set_visuals_of(Theme::Light, visuals(&Pal::light()));
     ctx.set_visuals_of(Theme::Dark, visuals(&Pal::dark()));
     ctx.all_styles_mut(|s| {
@@ -180,9 +220,14 @@ pub fn install(ctx: &egui::Context) {
     });
 }
 
-// ───────────────────────── градиенты ─────────────────────────
+/// Switches the theme at runtime. `System` follows the Windows setting live.
+pub fn apply(ctx: &egui::Context, mode: ThemeMode) {
+    ctx.set_theme(mode.preference());
+}
 
-/// Текстуры-градиенты: фирменный (#4f6bff → #8a5bff, как .hero) и серый (как .hero.off).
+// ───────────────────────── gradients ─────────────────────────
+
+/// Gradient textures: the brand one (#4f6bff → #8a5bff, like .hero) and a grey one (like .hero.off).
 pub struct Textures {
     pub accent: TextureHandle,
     pub grey: TextureHandle,
@@ -211,7 +256,7 @@ pub fn shadow(offset_y: i8, blur: u8, color: Color32) -> Shadow {
     Shadow { offset: [0, offset_y], blur, spread: 0, color }
 }
 
-/// Квадратный логотип с градиентом, как .logo.
+/// Square gradient logo, like .logo.
 pub fn logo(ui: &mut Ui, size: f32, glyph: &str, tex: &Textures) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let radius = size * 0.28;
@@ -221,9 +266,9 @@ pub fn logo(ui: &mut Ui, size: f32, glyph: &str, tex: &Textures) {
     painter.text(rect.center(), Align2::CENTER_CENTER, glyph, bold(size * 0.48), Color32::WHITE);
 }
 
-// ───────────────────────── текст ─────────────────────────
+// ───────────────────────── text ─────────────────────────
 
-/// Заголовок секции капсом с разрядкой (как h2 в настройках).
+/// Section heading in spaced capitals (like h2 in the settings).
 pub fn caps(ui: &mut Ui, text: &str, p: &Pal) -> Response {
     let mut job = LayoutJob::default();
     job.append(
@@ -245,9 +290,9 @@ pub fn divider(ui: &mut Ui, p: &Pal) {
     ui.add_space(10.0);
 }
 
-// ───────────────────────── кнопки ─────────────────────────
+// ───────────────────────── buttons ─────────────────────────
 
-/// Большая градиентная кнопка (как .hero / главная кнопка «Крутить»).
+/// Large gradient button (like .hero / the main call-to-action).
 #[allow(clippy::too_many_arguments)]
 pub fn gradient_button(
     ui: &mut Ui,
@@ -289,13 +334,13 @@ pub fn gradient_button(
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Btn {
-    /// Прозрачная с рамкой (.btn.ghost).
+    /// Transparent with a border (.btn.ghost).
     Ghost,
-    /// Мягкая акцентная заливка (как «Browse…»).
+    /// Soft accent fill (like "Browse…").
     Soft,
-    /// Маленькая серая (как «Clear» в поле ввода).
+    /// Small grey (like "Clear" inside an input).
     Small,
-    /// Текстовая ссылка (.link).
+    /// Text link (.link).
     Link,
 }
 
@@ -332,7 +377,7 @@ pub fn button_at(ui: &mut Ui, rect: Rect, id: Id, label: &str, kind: Btn, p: &Pa
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// Кнопка, которая сама занимает место по размеру текста.
+/// Button that sizes itself to its text.
 pub fn button(ui: &mut Ui, label: &str, kind: Btn, p: &Pal) -> Response {
     let (font, pad) = match kind {
         Btn::Small => (semi(12.0), vec2(9.0, 4.0)),
@@ -344,9 +389,9 @@ pub fn button(ui: &mut Ui, label: &str, kind: Btn, p: &Pal) -> Response {
     button_at(ui, rect, ui.scope_id().with(("btn", label)), label, kind, p)
 }
 
-// ───────────────────────── переключатель и слайдер ─────────────────────────
+// ───────────────────────── switch and slider ─────────────────────────
 
-/// Переключатель 42×24 как .switch.
+/// 42×24 switch, like .switch.
 pub fn switch(ui: &mut Ui, on: &mut bool, p: &Pal) -> Response {
     let (rect, mut resp) = ui.allocate_exact_size(vec2(42.0, 24.0), Sense::click());
     if resp.clicked() {
@@ -363,7 +408,7 @@ pub fn switch(ui: &mut Ui, on: &mut bool, p: &Pal) -> Response {
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// Слайдер с акцентной заливкой (как .slider с accent-color).
+/// Slider with an accent fill (like .slider with accent-color).
 pub fn slider(ui: &mut Ui, value: &mut f32, min: f32, max: f32, step: f32, p: &Pal) -> Response {
     let (rect, mut resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click_and_drag());
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 18.0, 4.0));
@@ -391,7 +436,7 @@ pub fn slider(ui: &mut Ui, value: &mut f32, min: f32, max: f32, step: f32, p: &P
     resp.on_hover_cursor(CursorIcon::PointingHand)
 }
 
-/// Значение в «таблетке» как .pill.
+/// Value in a pill, like .pill.
 pub fn pill(ui: &mut Ui, text: &str, p: &Pal) {
     let g = ui.painter().layout_no_wrap(text.to_string(), bold(12.5), p.accent);
     let size = vec2((g.size().x + 20.0).max(40.0), 24.0);
@@ -400,7 +445,7 @@ pub fn pill(ui: &mut Ui, text: &str, p: &Pal) {
     ui.painter().galley(rect.center() - g.size() / 2.0, g, p.accent);
 }
 
-// ───────────────────────── значки ─────────────────────────
+// ───────────────────────── icons ─────────────────────────
 
 pub fn icon_list(painter: &Painter, c: Pos2, col: Color32) {
     let s = Stroke::new(1.6, col);
@@ -439,7 +484,7 @@ pub fn icon_spin(painter: &Painter, c: Pos2, col: Color32) {
         })
         .collect();
     painter.add(Shape::line(pts, Stroke::new(1.7, col)));
-    // Наконечник стрелки в конце дуги, по ходу часовой стрелки.
+    // Arrow head at the end of the arc, clockwise.
     let end = c + vec2(a1.cos(), a1.sin()) * r;
     let fwd = vec2(-a1.sin(), a1.cos());
     let normal = vec2(a1.cos(), a1.sin());

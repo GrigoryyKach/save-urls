@@ -1,5 +1,5 @@
-//! Дополнительные компоненты поверх `theme.rs` (сам `theme.rs` общий с Random Wheel и не меняется):
-//! значки, строки навигации, пункты меню, поле ввода с фокусной обводкой, цвета значков сайтов.
+//! Extra components on top of `theme.rs` (`theme.rs` itself is shared across the suite and stays untouched):
+//! icons, navigation rows, menu items, an input field with a focus ring, site badge colours.
 
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Frame, Id, Margin, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
@@ -10,7 +10,7 @@ use crate::theme::{self, Pal, hex, mix};
 
 pub type IconFn = fn(&Painter, Pos2, Color32);
 
-// ───────────────────────── значки ─────────────────────────
+// ───────────────────────── icons ─────────────────────────
 
 fn poly(painter: &Painter, c: Pos2, pts: &[(f32, f32)], closed: bool, s: Stroke) {
     let pts: Vec<Pos2> = pts.iter().map(|&(x, y)| c + vec2(x, y)).collect();
@@ -21,7 +21,7 @@ fn poly(painter: &Painter, c: Pos2, pts: &[(f32, f32)], closed: bool, s: Stroke)
     }
 }
 
-/// Контур капсулы вдоль направления `dir`.
+/// Capsule outline along the direction `dir`.
 fn capsule(painter: &Painter, center: Pos2, dir: Vec2, half: f32, r: f32, s: Stroke) {
     let n = vec2(-dir.y, dir.x);
     let mut pts = Vec::new();
@@ -129,13 +129,13 @@ pub fn icon_close(p: &Painter, c: Pos2, col: Color32) {
     p.line_segment([c + vec2(4.0, -4.0), c + vec2(-4.0, 4.0)], s);
 }
 
-// ───────────────────────── цвета ─────────────────────────
+// ───────────────────────── colours ─────────────────────────
 
 pub const DANGER: Color32 = hex(0xe5484d);
 
 const BADGES: [u32; 8] = [0x4f6bff, 0x8a5bff, 0x12a594, 0xf76b15, 0xe93d82, 0x30a46c, 0x0090ff, 0xe5484d];
 
-/// Цвет значка сайта — стабильный для домена.
+/// Site badge colour: stable for a domain.
 pub fn badge_color(domain: &str) -> Color32 {
     let mut h: u32 = 2166136261;
     for b in domain.bytes() {
@@ -144,16 +144,16 @@ pub fn badge_color(domain: &str) -> Color32 {
     hex(BADGES[(h % BADGES.len() as u32) as usize])
 }
 
-/// Буква для значка: первая буква домена без «www.» и поддоменов вроде «m.».
+/// Badge letter: the first letter of the domain without "www." and subdomains like "m.".
 pub fn badge_letter(domain: &str) -> String {
     let parts: Vec<&str> = domain.split('.').collect();
     let main = if parts.len() >= 2 { parts[parts.len() - 2] } else { domain };
     main.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "•".into())
 }
 
-// ───────────────────────── компоненты ─────────────────────────
+// ───────────────────────── components ─────────────────────────
 
-/// Логотип: картинка иконки с тенью (как `theme::logo`).
+/// Logo: the icon image with a shadow (like `theme::logo`).
 pub fn logo(ui: &mut Ui, size: f32, tex: &TextureHandle) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
@@ -161,13 +161,13 @@ pub fn logo(ui: &mut Ui, size: f32, tex: &TextureHandle) {
     painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 }
 
-/// Строка навигации в боковой панели: значок, название, счётчик.
+/// Navigation row in the sidebar: icon, label, counter.
 pub struct NavRow<'a> {
     pub icon: IconFn,
     pub label: &'a str,
     pub count: Option<usize>,
     pub active: bool,
-    /// Подсветка при перетаскивании ссылки на папку.
+    /// Highlight while a link is dragged over the folder.
     pub drop_hover: bool,
 }
 
@@ -205,7 +205,7 @@ pub fn nav_row(ui: &mut Ui, id: Id, row: NavRow, p: &Pal) -> Response {
     resp
 }
 
-/// Пункт выпадающего / контекстного меню.
+/// Dropdown / context menu item.
 pub fn menu_item(ui: &mut Ui, label: &str, icon: Option<IconFn>, checked: bool, danger: bool, p: &Pal) -> Response {
     let w = ui.available_width().max(200.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
@@ -242,7 +242,7 @@ pub fn menu_frame(p: &Pal) -> Frame {
         .shadow(theme::shadow(8, 24, Color32::from_black_alpha(if p.dark { 110 } else { 40 })))
 }
 
-/// Квадратная кнопка-значок.
+/// Square icon button.
 pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, icon: IconFn, tip: &str, danger: bool, p: &Pal) -> Response {
     let resp = ui.interact(rect, id, Sense::click()).on_hover_cursor(CursorIcon::PointingHand).on_hover_text(tip);
     let hov = resp.hovered();
@@ -254,7 +254,7 @@ pub fn icon_button(ui: &mut Ui, rect: Rect, id: Id, icon: IconFn, tip: &str, dan
     resp
 }
 
-/// Однострочное поле в стиле Smart Switcher: фон, рамка, акцентная обводка в фокусе, значок слева.
+/// Single-line field in the Smart Switcher style: fill, border, accent ring on focus, icon on the left.
 pub fn text_field(ui: &mut Ui, text: &mut String, hint: &str, icon: Option<IconFn>, id: Id, p: &Pal) -> Response {
     let left = if icon.is_some() { 36 } else { 12 };
     let frame = Frame::new().fill(p.bg).stroke(Stroke::new(1.0, p.line)).corner_radius(10).inner_margin(Margin { left, right: 12, top: 9, bottom: 9 });
@@ -301,7 +301,7 @@ pub fn focus_ring(ui: &Ui, rect: Rect, focused: bool, p: &Pal) {
     }
 }
 
-/// Кнопка-выпадающий список: подпись и стрелка, как поле ввода.
+/// Dropdown button: caption and arrow, styled like an input field.
 pub fn dropdown_button(ui: &mut Ui, label: &str, icon: Option<IconFn>, width: f32, id: Id, p: &Pal) -> Response {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 38.0), Sense::hover());
     let resp = ui.interact(rect, id, Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
@@ -319,7 +319,7 @@ pub fn dropdown_button(ui: &mut Ui, label: &str, icon: Option<IconFn>, width: f3
     resp
 }
 
-/// Сегментированный переключатель (как «Список / Колесо» в Random Wheel).
+/// Segmented switch (like "List / Wheel" in Random Wheel).
 pub fn segmented(ui: &mut Ui, items: &[&str], selected: usize, p: &Pal) -> Option<usize> {
     let font = theme::semi(13.0);
     let widths: Vec<f32> = items.iter().map(|l| ui.painter().layout_no_wrap(l.to_string(), font.clone(), p.text).size().x + 28.0).collect();
@@ -351,7 +351,7 @@ pub fn segmented(ui: &mut Ui, items: &[&str], selected: usize, p: &Pal) -> Optio
     out
 }
 
-/// Строка «название + подсказка + переключатель» (как в Random Wheel).
+/// Row "title + hint + switch" (as in Random Wheel).
 pub fn switch_row(ui: &mut Ui, p: &Pal, title: &str, hint: &str, value: &mut bool) -> bool {
     let mut changed = false;
     let w = ui.available_width();
@@ -371,7 +371,7 @@ pub fn switch_row(ui: &mut Ui, p: &Pal, title: &str, hint: &str, value: &mut boo
     changed
 }
 
-/// Карточка-секция для страницы настроек.
+/// Card section for the settings page.
 pub fn card_frame(p: &Pal) -> Frame {
     Frame::new().fill(p.card).stroke(Stroke::new(1.0, p.line)).corner_radius(14).inner_margin(Margin::symmetric(20, 16))
 }

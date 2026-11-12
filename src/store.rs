@@ -1,6 +1,7 @@
-//! Библиотека ссылок: модель данных и хранение в `%APPDATA%\Save URLs\library.json`.
-//! Общая для окна и потока трея (`Shared`), поэтому сохранение — атомарная запись через временный файл.
+//! Link library: data model and storage in `%APPDATA%\Save URLs\library.json`.
+//! Shared between the window and the tray thread (`Shared`), so saving is an atomic write through a temporary file.
 
+use crate::theme::ThemeMode;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -23,9 +24,9 @@ pub struct Link {
     pub title: String,
     pub description: String,
     pub folder: Option<FolderId>,
-    /// Время добавления, секунды Unix.
+    /// Time added, Unix seconds.
     pub added: i64,
-    /// Название ещё не меняли руками — его можно заменить загруженным заголовком страницы.
+    /// The title has not been edited by hand, so a downloaded page title may replace it.
     pub auto_title: bool,
 }
 
@@ -40,14 +41,16 @@ pub enum Sort {
 
 impl Sort {
     pub const ALL: [Sort; 5] = [Sort::Newest, Sort::Oldest, Sort::NameAsc, Sort::NameDesc, Sort::Domain];
+    /// Caption in the current interface language.
     pub fn label(self) -> &'static str {
-        match self {
-            Sort::Newest => "Сначала новые",
-            Sort::Oldest => "Сначала старые",
-            Sort::NameAsc => "По названию, А→Я",
-            Sort::NameDesc => "По названию, Я→А",
-            Sort::Domain => "По сайту",
-        }
+        let i = match self {
+            Sort::Newest => 0,
+            Sort::Oldest => 1,
+            Sort::NameAsc => 2,
+            Sort::NameDesc => 3,
+            Sort::Domain => 4,
+        };
+        crate::strings::s().sort[i]
     }
 }
 
@@ -61,25 +64,29 @@ pub enum ClickAction {
 #[serde(default)]
 pub struct Settings {
     pub sort: Sort,
-    /// Загружать название страницы из интернета после сохранения.
+    /// Download the page title from the internet after saving.
     pub fetch_titles: bool,
-    /// Уведомление Windows после сохранения из трея.
+    /// Windows notification after saving from the tray.
     pub notify: bool,
-    /// Глобальная горячая клавиша Ctrl+Alt+S.
+    /// Global hotkey Ctrl+Alt+S.
     pub hotkey: bool,
-    /// Что делает левый клик по значку в трее.
+    /// What a left click on the tray icon does.
     pub click: ClickAction,
-    /// Папка для новых ссылок (None — «Без папки»).
+    /// Folder for new links (None means "No folder").
     pub default_folder: Option<FolderId>,
-    /// Подсказку «программа работает в трее» уже показывали.
+    /// The "the program runs in the tray" hint has already been shown.
     pub tray_hint_shown: bool,
-    /// Проверять обновления при запуске (NIMVORO).
+    /// Check for updates at startup (NIMVORO).
     pub check_updates: bool,
+    /// Interface language code (`en`, `ru`, `uk`); None until first start resolves it.
+    pub language: Option<String>,
+    /// Theme: system, light or dark.
+    pub theme: ThemeMode,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { sort: Sort::Newest, fetch_titles: true, notify: true, hotkey: true, click: ClickAction::Save, default_folder: None, tray_hint_shown: false, check_updates: true }
+        Self { sort: Sort::Newest, fetch_titles: true, notify: true, hotkey: true, click: ClickAction::Save, default_folder: None, tray_hint_shown: false, check_updates: true, language: None, theme: ThemeMode::System }
     }
 }
 
@@ -108,7 +115,7 @@ pub fn now_unix() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// Для сравнения ссылок на дубликаты: без схемы, `www.`, завершающего `/` и регистра хоста.
+/// Key for duplicate detection: ignores the scheme, `www.`, a trailing `/` and the host's letter case.
 pub fn url_key(url: &str) -> String {
     let p = crate::urlx::pretty(url.trim());
     match p.find('/') {
@@ -122,15 +129,27 @@ pub struct Store {
     path: Option<PathBuf>,
     dirty_at: Option<Instant>,
     backed_up: bool,
-    /// Номер изменения — окно перечитывает производные данные, когда он меняется.
+    /// Change counter: the window recomputes derived data when it changes.
     pub rev: u64,
-    /// Сообщение, если файл библиотеки не удалось прочитать (он сохранён рядом под другим именем).
-    pub load_error: Option<String>,
+    /// Set when the library file could not be read (it was kept next to the original under another name).
+    pub load_error: Option<LoadError>,
+}
+
+/// Why the library file was rejected; the window turns it into a localized message.
+#[derive(Clone, Debug)]
+pub struct LoadError {
+    pub detail: String,
+    pub backup: String,
 }
 
 pub type Shared = Arc<Mutex<Store>>;
 
-/// Рядом с exe лежит library.json — работаем в портативном режиме, иначе %APPDATA%\Save URLs.
+/// True when a `library.json` lies next to the exe (portable mode).
+pub fn is_portable() -> bool {
+    std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("library.json").exists())).unwrap_or(false)
+}
+
+/// A `library.json` next to the exe means portable mode; otherwise `%APPDATA%\Save URLs` is used.
 fn default_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
         let local = dir.join("library.json");
@@ -152,14 +171,11 @@ impl Store {
             Some(Ok(text)) => match serde_json::from_str::<Library>(&text) {
                 Ok(lib) => lib,
                 Err(e) => {
-                    // Не затираем испорченный файл: откладываем его в сторону.
+                    // Never overwrite a broken file: move it aside.
                     let p = path.as_ref().unwrap();
                     let broken = p.with_file_name(format!("library.broken-{}.json", now_unix()));
                     let _ = std::fs::rename(p, &broken);
-                    load_error = Some(format!(
-                        "Файл библиотеки повреждён ({e}). Он сохранён как {}",
-                        broken.file_name().unwrap_or_default().to_string_lossy()
-                    ));
+                    load_error = Some(LoadError { detail: e.to_string(), backup: broken.file_name().unwrap_or_default().to_string_lossy().into_owned() });
                     Library::default()
                 }
             },
@@ -170,7 +186,7 @@ impl Store {
         s
     }
 
-    /// Чиним то, что могло сломаться при ручной правке файла: id, ссылки на удалённые папки.
+    /// Repairs what manual edits of the file may have broken: ids and references to deleted folders.
     fn repair(&mut self) {
         let max = self.lib.links.iter().map(|l| l.id).chain(self.lib.folders.iter().map(|f| f.id)).max().unwrap_or(0);
         self.lib.next_id = self.lib.next_id.max(max + 1);
@@ -195,7 +211,7 @@ impl Store {
         id
     }
 
-    /// Отметить изменение; запись на диск — через полсекунды (`flush_if_due`) или сразу (`save_now`).
+    /// Marks a change; it is written to disk after half a second (`flush_if_due`) or at once (`save_now`).
     pub fn touch(&mut self) {
         self.rev += 1;
         self.dirty_at.get_or_insert_with(Instant::now);
@@ -217,7 +233,7 @@ impl Store {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        // Раз за запуск сохраняем копию предыдущей версии.
+        // Once per run, keep a copy of the previous version.
         if !self.backed_up && p.exists() {
             let _ = std::fs::copy(&p, p.with_file_name("library.bak.json"));
             self.backed_up = true;
@@ -229,14 +245,14 @@ impl Store {
         }
     }
 
-    // ───────────────────────── ссылки ─────────────────────────
+    // ───────────────────────── links ─────────────────────────
 
     pub fn find_url(&self, url: &str) -> Option<LinkId> {
         let key = url_key(url);
         self.lib.links.iter().find(|l| url_key(&l.url) == key).map(|l| l.id)
     }
 
-    /// Добавляет ссылку (если такой ещё нет) в папку по умолчанию или в `folder`.
+    /// Adds a link (unless it already exists) to the default folder or to `folder`.
     pub fn add_url(&mut self, url: &str, folder: Option<Option<FolderId>>) -> Added {
         if let Some(id) = self.find_url(url) {
             return Added::Exists(id);
@@ -264,7 +280,7 @@ impl Store {
         self.lib.links.iter_mut().find(|l| l.id == id)
     }
 
-    /// Заголовок страницы пришёл из сети — подставляем, если пользователь не переименовал ссылку.
+    /// A page title arrived from the network: use it unless the user renamed the link.
     pub fn set_fetched_title(&mut self, id: LinkId, title: &str) -> bool {
         let Some(l) = self.link_mut(id) else { return false };
         if !l.auto_title || title.trim().is_empty() {
@@ -303,7 +319,7 @@ impl Store {
         }
     }
 
-    // ───────────────────────── папки ─────────────────────────
+    // ───────────────────────── folders ─────────────────────────
 
     pub fn folder(&self, id: FolderId) -> Option<&Folder> {
         self.lib.folders.iter().find(|f| f.id == id)
@@ -312,7 +328,7 @@ impl Store {
     pub fn folder_name(&self, id: Option<FolderId>) -> String {
         match id.and_then(|f| self.folder(f)) {
             Some(f) => f.name.clone(),
-            None => "Без папки".into(),
+            None => crate::strings::s().no_folder.into(),
         }
     }
 
@@ -338,7 +354,7 @@ impl Store {
         }
     }
 
-    /// Удаляет папку; ссылки из неё остаются в «Без папки».
+    /// Deletes a folder; its links stay in the library under "No folder".
     pub fn delete_folder(&mut self, id: FolderId) {
         self.lib.folders.retain(|f| f.id != id);
         for l in &mut self.lib.links {
@@ -365,9 +381,9 @@ impl Store {
     }
 }
 
-/// «Новая папка», «Новая папка 2», …
+/// "New folder", "New folder 2", ...
 fn unique_name(base: &str, folders: &[Folder], except: Option<FolderId>) -> String {
-    let base = if base.is_empty() { "Новая папка" } else { base };
+    let base = if base.is_empty() { crate::strings::s().new_folder } else { base };
     let taken = |n: &str| folders.iter().any(|f| Some(f.id) != except && f.name.to_lowercase() == n.to_lowercase());
     if !taken(base) {
         return base.to_string();

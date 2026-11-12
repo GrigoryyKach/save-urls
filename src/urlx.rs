@@ -1,7 +1,7 @@
-//! Разбор ссылок: поиск адреса в скопированном тексте, домен, красивый вид, название страницы из HTML.
+//! Link parsing: finding an address in copied text, the domain, a readable form, the page title from HTML.
 
-/// Находит первую ссылку в тексте. Понимает `https://…`, `http://…`, `www.…`,
-/// а если весь текст — один «домен/путь» (`github.com/user/repo`), дописывает `https://`.
+/// Finds the first link in the text. Understands `https://...`, `http://...`, `www....`,
+/// and if the whole text is a single "domain/path" (`github.com/user/repo`), prepends `https://`.
 pub fn extract_url(text: &str) -> Option<String> {
     let text = text.trim();
     if text.is_empty() || text.len() > 16 * 1024 {
@@ -11,7 +11,7 @@ pub fn extract_url(text: &str) -> Option<String> {
     for raw in &tokens {
         let t = clean_token(raw);
         let lower = t.to_ascii_lowercase();
-        // Ссылка может быть приклеена к тексту: «смотри:https://…».
+        // The link may be glued to text: "look:https://...".
         for scheme in ["https://", "http://"] {
             if let Some(pos) = lower.find(scheme) {
                 let cand = &t[pos..];
@@ -33,13 +33,13 @@ pub fn extract_url(text: &str) -> Option<String> {
     None
 }
 
-/// Убирает кавычки, скобки и знаки препинания вокруг ссылки.
+/// Strips quotes, brackets and punctuation around a link.
 fn clean_token(t: &str) -> &str {
     let mut t = t.trim_matches(|c: char| matches!(c, '"' | '\'' | '<' | '>' | '«' | '»' | '“' | '”' | '`' | '[' | ']' | '{' | '}'));
     loop {
         let before = t.len();
         t = t.trim_end_matches(['.', ',', ';', ':', '!', '?']);
-        // Закрывающую скобку оставляем, если в ссылке есть открывающая (Википедия).
+        // Keep a closing bracket if the link contains an opening one (Wikipedia).
         if t.ends_with(')') && t.matches('(').count() < t.matches(')').count() {
             t = &t[..t.len() - 1];
         }
@@ -50,12 +50,12 @@ fn clean_token(t: &str) -> &str {
     }
 }
 
-/// Часть после схемы до пути: `user@host:port`.
+/// The part after the scheme up to the path: `user@host:port`.
 fn host_part(rest: &str) -> &str {
     let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let auth = &rest[..end];
     let host = auth.rsplit('@').next().unwrap_or(auth);
-    // Порт отрезаем, IPv6 в скобках не трогаем.
+    // Cut the port off, leave bracketed IPv6 alone.
     if host.starts_with('[') {
         return host;
     }
@@ -74,33 +74,33 @@ fn valid_host(host: &str) -> bool {
         && host.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '.')
 }
 
-/// Строже, чем `valid_host`: последняя часть — буквы (не «1.5» и не «file.txt» с цифрами-версиями).
+/// Stricter than `valid_host`: the last label is letters (not "1.5" and not "file.txt" with version digits).
 fn looks_like_domain(host: &str) -> bool {
     if !valid_host(host) || host.eq_ignore_ascii_case("localhost") || host.starts_with('[') {
         return false;
     }
     let tld = host.rsplit('.').next().unwrap_or("");
     let tld_ok = tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic);
-    // Частые «не домены»: имена файлов.
+    // Common "non-domains": file names.
     const FILE_EXT: [&str; 14] = ["txt", "exe", "png", "jpg", "jpeg", "gif", "pdf", "doc", "docx", "zip", "rs", "js", "md", "json"];
     tld_ok && !FILE_EXT.contains(&tld.to_ascii_lowercase().as_str())
 }
 
-/// Хост без `www.`: `https://www.github.com/x` → `github.com`.
+/// Host without `www.`: `https://www.github.com/x` -> `github.com`.
 pub fn domain(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let host = host_part(rest).to_lowercase();
     host.strip_prefix("www.").map(str::to_string).unwrap_or(host)
 }
 
-/// Адрес для показа: без схемы, `www.` и завершающего `/`.
+/// Address for display: without the scheme, `www.` and a trailing `/`.
 pub fn pretty(url: &str) -> String {
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
     let rest = rest.strip_prefix("www.").unwrap_or(rest);
     rest.strip_suffix('/').unwrap_or(rest).to_string()
 }
 
-/// Название по умолчанию, пока страница не загружена: домен и последний кусок пути.
+/// Default title until the page is downloaded: the domain and the last piece of the path.
 pub fn fallback_title(url: &str) -> String {
     let d = domain(url);
     let rest = url.split_once("://").map_or(url, |(_, r)| r);
@@ -130,9 +130,9 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| s.to_string())
 }
 
-// ───────────────────────── название страницы ─────────────────────────
+// ───────────────────────── page title ─────────────────────────
 
-/// Декодирует ответ сервера: UTF-8, иначе Windows-1251 (если так сказано в заголовке или meta), иначе Latin-1.
+/// Decodes the server response: UTF-8, otherwise Windows-1251 (if the header or meta says so), otherwise Latin-1.
 pub fn decode_html(bytes: &[u8], content_type: &str) -> String {
     if let Ok(s) = std::str::from_utf8(bytes) {
         return s.to_string();
@@ -144,7 +144,7 @@ pub fn decode_html(bytes: &[u8], content_type: &str) -> String {
     if is_1251 {
         bytes.iter().map(|&b| cp1251(b)).collect()
     } else if declares_utf8 {
-        // Обрезанный посередине символ в конце буфера — не повод терять весь текст.
+        // A character cut in half at the end of the buffer is no reason to lose the whole text.
         String::from_utf8_lossy(bytes).into_owned()
     } else {
         bytes.iter().map(|&b| b as char).collect()
@@ -170,16 +170,16 @@ fn cp1251(b: u8) -> char {
     }
 }
 
-/// Название страницы: `<title>`, а если его нет — `og:title`.
+/// Page title: `<title>`, or `og:title` if there is none.
 pub fn parse_title(html: &str) -> Option<String> {
     let lower = html.to_ascii_lowercase();
     let from_title = (|| {
         let mut from = 0;
-        // Пропускаем <title> внутри <svg> и т.п. — берём первый непустой.
+        // Skip <title> inside <svg> and the like: take the first non-empty one.
         while let Some(i) = lower[from..].find("<title") {
             let start = from + i;
             let after = &lower[start + 6..];
-            // Это должен быть именно тег <title>, а не <titlebar>.
+            // It must be exactly the <title> tag, not <titlebar>.
             if !after.starts_with(['>', ' ', '\t', '\n', '\r']) {
                 from = start + 6;
                 continue;
@@ -238,7 +238,7 @@ fn attr(tag: &str, tag_l: &str, name: &str) -> Option<String> {
     None
 }
 
-/// Схлопывает пробелы, раскрывает HTML-сущности, ограничивает длину.
+/// Collapses whitespace, expands HTML entities, limits the length.
 pub fn clean_text(s: &str) -> String {
     let decoded = decode_entities(s);
     let mut out = String::new();
