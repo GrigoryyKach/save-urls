@@ -12,29 +12,41 @@ fn norm(s: &str) -> Vec<char> {
 }
 
 const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
+/// Russian ЙЦУКЕН, key by key in the same order as `EN`.
 const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюё";
+/// Standard Windows Ukrainian layout, key by key in the same order as `EN`.
+const UK: &str = "йцукенгшщзхїфівапролджєячсмитьбюґ";
 
-/// The same query in the other layout (Russian/English), if there is anything to convert.
-pub fn swap_layout(s: &str) -> Option<String> {
+/// The same text as if it had been typed in the other layout. Latin text becomes Russian and Ukrainian
+/// variants; Cyrillic text (either layout) becomes Latin. Empty when there is nothing to convert.
+pub fn swap_layouts(s: &str) -> Vec<String> {
     let en: Vec<char> = EN.chars().collect();
     let ru: Vec<char> = RU.chars().collect();
-    let mut changed = false;
-    let out: String = s
-        .chars()
-        .map(|c| {
-            let l = c.to_lowercase().next().unwrap_or(c);
-            if let Some(i) = en.iter().position(|&e| e == l) {
-                changed = true;
-                ru[i]
-            } else if let Some(i) = ru.iter().position(|&r| r == l) {
-                changed = true;
-                en[i]
-            } else {
-                l
-            }
-        })
-        .collect();
-    changed.then_some(out)
+    let uk: Vec<char> = UK.chars().collect();
+    let lower: Vec<char> = s.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect();
+    let has_latin_key = lower.iter().any(|c| en.contains(c));
+    let has_cyr_key = lower.iter().any(|c| ru.contains(c) || uk.contains(c));
+    let to_en = |c: char| -> char {
+        match ru.iter().position(|&r| r == c).or_else(|| uk.iter().position(|&u| u == c)) {
+            Some(i) => en[i],
+            None => c,
+        }
+    };
+    let to_cyr = |c: char, table: &[char]| -> char {
+        match en.iter().position(|&e| e == c) {
+            Some(i) => table[i],
+            None => c,
+        }
+    };
+    let mut out = Vec::new();
+    if has_latin_key {
+        out.push(lower.iter().map(|&c| to_cyr(c, &ru)).collect::<String>());
+        out.push(lower.iter().map(|&c| to_cyr(c, &uk)).collect::<String>());
+    }
+    if has_cyr_key {
+        out.push(lower.iter().map(|&c| to_en(c)).collect::<String>());
+    }
+    out
 }
 
 pub struct Query {
@@ -48,9 +60,9 @@ impl Query {
             .split_whitespace()
             .map(|t| {
                 let mut v = vec![norm(t)];
-                if let Some(s) = swap_layout(t) {
+                for s in swap_layouts(t) {
                     let s = norm(&s);
-                    if s != v[0] {
+                    if !v.contains(&s) {
                         v.push(s);
                     }
                 }
@@ -227,6 +239,19 @@ mod tests {
         assert!(s("ghbdtn", "Привет мир", "", "").is_some());
         assert!(s("gthb", "", "", "github.com").is_some());
         assert!(s("прогрмма", "Полезная программа", "", "").is_some());
+    }
+
+    #[test]
+    fn ukrainian_layout() {
+        // i, ], ' and ` are the keys of і, ї, є and ґ on the Ukrainian layout (ы, ъ, э, ё on the Russian one).
+        assert_eq!(swap_layouts("s]'`"), vec!["ыъэё".to_string(), "іїєґ".to_string()]);
+        assert_eq!(swap_layouts("іїєґ"), vec!["s]'`".to_string()]);
+        // "привіт" typed on the Ukrainian layout is "ghbdsn" on the Latin keys, and the other way round.
+        assert!(s("привіт", "", "", "ghbdsn.example.com").is_some());
+        assert!(s("ghbdsn", "Привіт, світе", "", "").is_some());
+        // The Russian behaviour is unchanged.
+        assert!(s("ghbdtn", "Привет мир", "", "").is_some());
+        assert!(s("пшерги", "GitHub", "", "github.com").is_some());
     }
 
     #[test]
