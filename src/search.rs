@@ -11,11 +11,12 @@ fn norm(s: &str) -> Vec<char> {
     s.chars().map(norm_char).collect()
 }
 
-const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`";
+const EN: &str = "qwertyuiop[]asdfghjkl;'zxcvbnm,.`\\";
 /// Russian ЙЦУКЕН, key by key in the same order as `EN`.
-const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюё";
-/// Standard Windows Ukrainian layout, key by key in the same order as `EN`.
-const UK: &str = "йцукенгшщзхїфівапролджєячсмитьбюґ";
+const RU: &str = "йцукенгшщзхъфывапролджэячсмитьбюё\\";
+/// Windows "Ukrainian (Enhanced)" layout, key by key in the same order as `EN`:
+/// the backquote key gives the apostrophe and ґ sits on the backslash key.
+const UK: &str = "йцукенгшщзхїфівапролджєячсмитьбю'ґ";
 
 /// The same text as if it had been typed in the other layout. Latin text becomes Russian and Ukrainian
 /// variants; Cyrillic text (either layout) becomes Latin. Empty when there is nothing to convert.
@@ -25,7 +26,7 @@ pub fn swap_layouts(s: &str) -> Vec<String> {
     let uk: Vec<char> = UK.chars().collect();
     let lower: Vec<char> = s.chars().map(|c| c.to_lowercase().next().unwrap_or(c)).collect();
     let has_latin_key = lower.iter().any(|c| en.contains(c));
-    let has_cyr_key = lower.iter().any(|c| ru.contains(c) || uk.contains(c));
+    let has_cyr_key = lower.iter().any(|&c| c.is_alphabetic() && (ru.contains(&c) || uk.contains(&c)));
     let to_en = |c: char| -> char {
         match ru.iter().position(|&r| r == c).or_else(|| uk.iter().position(|&u| u == c)) {
             Some(i) => en[i],
@@ -243,9 +244,11 @@ mod tests {
 
     #[test]
     fn ukrainian_layout() {
-        // i, ], ' and ` are the keys of і, ї, є and ґ on the Ukrainian layout (ы, ъ, э, ё on the Russian one).
-        assert_eq!(swap_layouts("s]'`"), vec!["ыъэё".to_string(), "іїєґ".to_string()]);
-        assert_eq!(swap_layouts("іїєґ"), vec!["s]'`".to_string()]);
+        // s, ], ' are the keys of і, ї, є on the Ukrainian layout (ы, ъ, э on the Russian one); ` gives ё (ru) or an apostrophe (uk), \ gives ґ (uk).
+        assert_eq!(swap_layouts("s]'`"), vec!["ыъэё".to_string(), "іїє'".to_string()]);
+        assert_eq!(swap_layouts("\\"), vec!["\\".to_string(), "ґ".to_string()]);
+        assert_eq!(swap_layouts("іїєґ"), vec!["s]'\\".to_string()]);
+        assert_eq!(swap_layouts("ё"), vec!["`".to_string()]);
         // "привіт" typed on the Ukrainian layout is "ghbdsn" on the Latin keys, and the other way round.
         assert!(s("привіт", "", "", "ghbdsn.example.com").is_some());
         assert!(s("ghbdsn", "Привіт, світе", "", "").is_some());
