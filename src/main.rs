@@ -8,6 +8,7 @@ mod nimvoro;
 mod search;
 mod store;
 mod strings;
+mod support;
 // Shared with the other NIMVORO tools: some components are unused here.
 #[allow(dead_code)]
 mod theme;

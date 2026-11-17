@@ -15,6 +15,7 @@ use crate::nimvoro::{self, UpdateState, Updater};
 use crate::search::Query;
 use crate::store::{Added, ClickAction, FolderId, Link, LinkId, Shared, Sort, Store};
 use crate::strings;
+use crate::support;
 use crate::theme::{self, Btn, Pal, Textures};
 use crate::urlx;
 use crate::win::{self, Event, Hub};
@@ -814,6 +815,8 @@ impl App {
                         }
                     });
                 });
+                theme::divider(ui, p);
+                support::support_section(ui, strings::lang());
                 theme::divider(ui, p);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
