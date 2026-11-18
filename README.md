@@ -34,7 +34,7 @@ The `--background` flag starts the program straight into the tray without a wind
 
 ### Linux
 
-Unpack the archive and run `./save-urls`. Runtime needs: GTK 3 (file dialog), `libayatana-appindicator3` (tray icon), `curl` (page titles) and `xdg-utils`
+Unpack the archive and run `./save-urls`. Runtime needs: GTK 3 and `libayatana-appindicator3` (tray icon), `xdg-desktop-portal` (the export file dialog), `curl` (page titles) and `xdg-utils`
 (opening links). To build from source:
 
 ```bash

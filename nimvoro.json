@@ -49,7 +49,7 @@
   "linux": {
     "asset": "SaveUrls-linux-x64.tar.gz",
     "exe": "save-urls",
-    "requirements": "Linux x86_64 (X11 or Wayland) with GTK 3, libayatana-appindicator3 (tray icon; GNOME also needs the AppIndicator extension), curl and xdg-utils. The Ctrl+Alt+S hotkey works on X11 only: on Wayland bind a system shortcut to: save-urls --save-clipboard"
+    "requirements": "Linux x86_64 (X11 or Wayland) with GTK 3 and libayatana-appindicator3 (tray icon; GNOME also needs the AppIndicator extension), xdg-desktop-portal (file dialog), curl and xdg-utils. The Ctrl+Alt+S hotkey works on X11 only: on Wayland bind a system shortcut to: save-urls --save-clipboard"
   },
   "settingsDir": "%APPDATA%\\Save URLs",
   "i18n": {
@@ -83,7 +83,7 @@
         "Windows 10/11 x64"
       ],
       "linux": {
-        "requirements": "Linux x86_64 (X11 или Wayland) с GTK 3, libayatana-appindicator3 (значок в трее; в GNOME нужно расширение AppIndicator), curl и xdg-utils. Сочетание Ctrl+Alt+S работает только в X11: в Wayland назначьте системное сочетание на команду: save-urls --save-clipboard"
+        "requirements": "Linux x86_64 (X11 или Wayland) с GTK 3 и libayatana-appindicator3 (значок в трее; в GNOME нужно расширение AppIndicator), xdg-desktop-portal (диалог файла), curl и xdg-utils. Сочетание Ctrl+Alt+S работает только в X11: в Wayland назначьте системное сочетание на команду: save-urls --save-clipboard"
       }
     },
     "uk": {
@@ -116,7 +116,7 @@
         "Windows 10/11 x64"
       ],
       "linux": {
-        "requirements": "Linux x86_64 (X11 або Wayland) з GTK 3, libayatana-appindicator3 (значок у треї; у GNOME потрібне розширення AppIndicator), curl і xdg-utils. Поєднання Ctrl+Alt+S працює лише в X11: у Wayland призначте системне поєднання на команду: save-urls --save-clipboard"
+        "requirements": "Linux x86_64 (X11 або Wayland) з GTK 3 і libayatana-appindicator3 (значок у треї; у GNOME потрібне розширення AppIndicator), xdg-desktop-portal (діалог файлу), curl і xdg-utils. Поєднання Ctrl+Alt+S працює лише в X11: у Wayland призначте системне поєднання на команду: save-urls --save-clipboard"
       }
     }
   }
