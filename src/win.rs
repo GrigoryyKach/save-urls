@@ -134,6 +134,11 @@ pub fn single_instance() -> bool {
     }
 }
 
+/// The tray icon is always available on Windows (the window hides to it when closed).
+pub fn has_tray() -> bool {
+    true
+}
+
 pub fn spawn_tray(hub: Arc<Hub>) {
     if HUB.set(hub).is_err() {
         return;

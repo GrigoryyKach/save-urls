@@ -149,7 +149,7 @@ pub fn is_portable() -> bool {
     std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("library.json").exists())).unwrap_or(false)
 }
 
-/// A `library.json` next to the exe means portable mode; otherwise `%APPDATA%\Save URLs` is used.
+/// A `library.json` next to the exe means portable mode; otherwise `%APPDATA%\Save URLs` (`~/.config/Save URLs` on Linux) is used.
 fn default_path() -> Option<PathBuf> {
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
         let local = dir.join("library.json");
@@ -157,7 +157,7 @@ fn default_path() -> Option<PathBuf> {
             return Some(local);
         }
     }
-    dirs::data_dir().map(|d| d.join("Save URLs").join("library.json"))
+    dirs::config_dir().map(|d| d.join("Save URLs").join("library.json"))
 }
 
 impl Store {

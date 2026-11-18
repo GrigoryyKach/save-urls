@@ -17,6 +17,7 @@
 use crate::i18n::Lang;
 use crate::theme::{self, Pal};
 use eframe::egui::{self, Align2, Color32, ColorImage, CursorIcon, Id, Sense, TextureHandle, TextureOptions, Ui, vec2};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 
@@ -26,6 +27,7 @@ pub const URL: &str = "https://donatello.to/MicsGame";
 const QR_PNG: &[u8] = include_bytes!("../assets/support-qr.png");
 /// Logical size of the QR code on screen.
 const QR_SIZE: f32 = 136.0;
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct Strings {
@@ -73,7 +75,15 @@ pub fn tray_label(lang: Lang) -> &'static str {
 
 /// Opens the donation page in the default browser.
 pub fn open() {
+    #[cfg(windows)]
     let _ = Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", URL]).creation_flags(CREATE_NO_WINDOW).spawn();
+    #[cfg(not(windows))]
+    let _ = Command::new("xdg-open")
+        .arg(URL)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// Box-filter resample of an RGBA image to `n`×`n` (keeps the modules crisp, unlike GPU scaling).

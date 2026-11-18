@@ -13,11 +13,20 @@ mod support;
 #[allow(dead_code)]
 mod theme;
 mod urlx;
+#[cfg(windows)]
+mod win;
+#[cfg(not(windows))]
+#[path = "linux.rs"]
 mod win;
 
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    // `--save-clipboard` (Linux): save the link from the clipboard, for a system shortcut on Wayland.
+    #[cfg(not(windows))]
+    if win::handle_cli() {
+        return Ok(());
+    }
     // A second launch just shows the window of the program that is already running.
     if !win::single_instance() {
         return Ok(());

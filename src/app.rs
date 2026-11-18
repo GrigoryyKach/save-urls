@@ -7,7 +7,9 @@ use eframe::egui::{
     text::{LayoutJob, TextFormat, TextWrapping},
     vec2,
 };
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use raw_window_handle::HasWindowHandle;
+#[cfg(windows)]
+use raw_window_handle::RawWindowHandle;
 
 use crate::i18n;
 use crate::kit::{self, IconFn};
@@ -157,6 +159,7 @@ impl App {
         let mode = store.lock().map(|s| s.lib.settings.theme).unwrap_or_default();
         theme::install(&cc.egui_ctx, mode);
         let hwnd = match cc.window_handle().map(|h| h.as_raw()) {
+            #[cfg(windows)]
             Ok(RawWindowHandle::Win32(h)) => h.hwnd.get(),
             _ => 0,
         };
@@ -1415,7 +1418,7 @@ impl eframe::App for App {
         }
 
         // Closing the window sends it to the tray.
-        if ctx.input(|i| i.viewport().close_requested()) {
+        if ctx.input(|i| i.viewport().close_requested()) && win::has_tray() {
             ctx.send_viewport_cmd(ViewportCommand::CancelClose);
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));
             let mut st = self.store.lock().unwrap();

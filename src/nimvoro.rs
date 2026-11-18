@@ -1,7 +1,7 @@
 //! NIMVORO shared module: update check via GitHub Releases and hand-off of the update to the launcher.
 //!
 //! Copied byte for byte into every Rust tool of the suite. Needs no egui and no HTTP crate:
-//! the request is made by `curl.exe`, which ships with Windows. The contract is described in
+//! the request is made by `curl` (`curl.exe` on Windows), which ships with Windows and with Linux. The contract is described in
 //! `nimvoro/docs/ADDING_A_TOOL.md`.
 //!
 //! # Usage
@@ -16,11 +16,13 @@
 //! ```
 
 use crate::i18n::Lang;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -177,24 +179,40 @@ pub fn strings(lang: Lang) -> &'static Strings {
     }
 }
 
-/// Path to NIMVORO.exe, which the launcher records in `%APPDATA%\NIMVORO\launcher.json`.
+/// Folder of the NIMVORO launcher data: `%APPDATA%\NIMVORO` on Windows,
+/// `$XDG_CONFIG_HOME/NIMVORO` (default `~/.config/NIMVORO`) on Linux.
+fn launcher_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        Some(PathBuf::from(std::env::var_os("APPDATA")?).join("NIMVORO"))
+    }
+    #[cfg(not(windows))]
+    {
+        let base = match std::env::var_os("XDG_CONFIG_HOME").filter(|v| !v.is_empty()) {
+            Some(x) => PathBuf::from(x),
+            None => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+        };
+        Some(base.join("NIMVORO"))
+    }
+}
+
+/// Path to the launcher (NIMVORO.exe, or the AppImage / binary on Linux), which it records in `launcher.json`.
 pub fn launcher_path() -> Option<PathBuf> {
-    let dir = std::env::var_os("APPDATA")?;
-    let text = std::fs::read_to_string(PathBuf::from(dir).join("NIMVORO").join("launcher.json")).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let text = std::fs::read_to_string(launcher_dir()?.join("launcher.json")).ok()?;
+    let v: serde_json::Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     let p = PathBuf::from(v.get("path")?.as_str()?);
     p.exists().then_some(p)
 }
 
 fn latest_release(repo: &str) -> Option<(String, String)> {
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let out = Command::new("curl.exe")
-        .args(["-sfL", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-A", "NIMVORO-updater", &url])
+    let mut cmd = Command::new(if cfg!(windows) { "curl.exe" } else { "curl" });
+    cmd.args(["-sfL", "--max-time", "10", "-H", "Accept: application/vnd.github+json", "-A", "NIMVORO-updater", &url])
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .ok()?;
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let out = cmd.output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -228,7 +246,10 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 }
 
 fn open_url(url: &str) {
+    #[cfg(windows)]
     let _ = Command::new("rundll32.exe").args(["url.dll,FileProtocolHandler", url]).creation_flags(CREATE_NO_WINDOW).spawn();
+    #[cfg(not(windows))]
+    let _ = Command::new("xdg-open").arg(url).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
 #[cfg(test)]

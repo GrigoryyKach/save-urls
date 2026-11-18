@@ -131,7 +131,10 @@ pub fn bold(size: f32) -> FontId {
 /// plus Segoe UI Symbol/Emoji so icons do not turn into squares.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
+    #[cfg(windows)]
     let dir = std::path::Path::new(r"C:\Windows\Fonts");
+    #[cfg(not(windows))]
+    let dir = std::path::Path::new("/usr/share/fonts");
     let mut load = |key: &str, file: &str| -> bool {
         match std::fs::read(dir.join(file)) {
             Ok(bytes) => {
@@ -141,11 +144,25 @@ fn install_fonts(ctx: &egui::Context) {
             Err(_) => false,
         }
     };
-    let has_reg = load("segoe", "segoeui.ttf");
-    let has_sb = load("segoe-sb", "seguisb.ttf");
-    let has_b = load("segoe-b", "segoeuib.ttf");
-    let has_sym = load("segsym", "seguisym.ttf");
-    let has_emj = load("segemj", "seguiemj.ttf");
+    #[cfg(windows)]
+    let (has_reg, has_sb, has_b, has_sym, has_emj) = (
+        load("segoe", "segoeui.ttf"),
+        load("segoe-sb", "seguisb.ttf"),
+        load("segoe-b", "segoeuib.ttf"),
+        load("segsym", "seguisym.ttf"),
+        load("segemj", "seguiemj.ttf"),
+    );
+    // Linux: the bundled egui fonts stay in front; a system font with wide symbol coverage is the fallback.
+    #[cfg(not(windows))]
+    let (has_reg, has_sb, has_b, has_sym, has_emj) = (
+        false,
+        false,
+        false,
+        ["truetype/dejavu/DejaVuSans.ttf", "dejavu/DejaVuSans.ttf", "TTF/DejaVuSans.ttf", "truetype/noto/NotoSansSymbols2-Regular.ttf"]
+            .iter()
+            .any(|f| load("segsym", f)),
+        false,
+    );
 
     let base = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let with_front = |front: Option<&str>| {
@@ -222,7 +239,40 @@ pub fn install(ctx: &egui::Context, mode: ThemeMode) {
 
 /// Switches the theme at runtime. `System` follows the Windows setting live.
 pub fn apply(ctx: &egui::Context, mode: ThemeMode) {
+    #[cfg(not(windows))]
+    if mode == ThemeMode::System && ctx.system_theme().is_none() {
+        // X11 has no system theme event: ask the desktop settings, fall back to dark.
+        ctx.set_theme(if linux_prefers_dark() { egui::ThemePreference::Dark } else { egui::ThemePreference::Light });
+        return;
+    }
     ctx.set_theme(mode.preference());
+}
+
+/// Best effort dark-mode detection on Linux: GNOME/portal `color-scheme`, then the GTK theme name. Dark when unknown.
+#[cfg(not(windows))]
+fn linux_prefers_dark() -> bool {
+    let run = |prog: &str, args: &[&str]| {
+        std::process::Command::new(prog)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
+    };
+    if let Some(v) = run("gsettings", &["get", "org.gnome.desktop.interface", "color-scheme"]) {
+        if v.contains("prefer-dark") {
+            return true;
+        }
+        if v.contains("prefer-light") || v.contains("default") {
+            return false;
+        }
+    }
+    if let Some(v) = run("gsettings", &["get", "org.gnome.desktop.interface", "gtk-theme"]) {
+        return v.contains("dark");
+    }
+    true
 }
 
 // ───────────────────────── gradients ─────────────────────────
