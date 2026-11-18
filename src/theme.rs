@@ -152,17 +152,12 @@ fn install_fonts(ctx: &egui::Context) {
         load("segsym", "seguisym.ttf"),
         load("segemj", "seguiemj.ttf"),
     );
-    // Linux: the bundled egui fonts stay in front; a system font with wide symbol coverage is the fallback.
+    // Linux: the bundled egui fonts stay in front; system fonts with wide symbol coverage are the fallback.
     #[cfg(not(windows))]
-    let (has_reg, has_sb, has_b, has_sym, has_emj) = (
-        false,
-        false,
-        false,
-        ["truetype/dejavu/DejaVuSans.ttf", "dejavu/DejaVuSans.ttf", "TTF/DejaVuSans.ttf", "truetype/noto/NotoSansSymbols2-Regular.ttf"]
-            .iter()
-            .any(|f| load("segsym", f)),
-        false,
-    );
+    let (has_reg, has_sb, has_b, has_sym, has_emj) = {
+        let mut try_load = |key: &str, name: &str| find_font(dir, name, 4).is_some_and(|p| load(key, &p.to_string_lossy()));
+        (false, false, false, try_load("segsym", "NotoSansSymbols2-Regular.ttf"), try_load("segemj", "DejaVuSans.ttf"))
+    };
 
     let base = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let with_front = |front: Option<&str>| {
@@ -186,6 +181,24 @@ fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name("semibold".into()), sb);
     fonts.families.insert(FontFamily::Name("bold".into()), b);
     ctx.set_fonts(fonts);
+}
+
+/// Looks for a font file by name under `dir` (Linux: `/usr/share/fonts`, a few levels deep).
+#[cfg(not(windows))]
+fn find_font(dir: &std::path::Path, name: &str, depth: u8) -> Option<std::path::PathBuf> {
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if depth > 0 {
+                if let Some(found) = find_font(&path, name, depth - 1) {
+                    return Some(found);
+                }
+            }
+        } else if path.file_name().is_some_and(|n| n == name) {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn visuals(p: &Pal) -> egui::Visuals {
