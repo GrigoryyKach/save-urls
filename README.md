@@ -4,8 +4,9 @@ A link library for Windows and Linux that lives in the tray. Copy the address of
 the app takes its title from the page itself. In the window you can sort links into folders, describe them and find them quickly.
 
 Written in Rust (eframe/egui): a single executable with no dependencies, and the library is stored only on your computer.
-The look matches Random Wheel and Smart Switcher: the shared `src/theme.rs` (copied from `../random_wheel` unchanged),
-the brand gradient `#4f6bff → #8a5bff`, Segoe UI on Windows (the bundled font on Linux), cards and capitalised section headings.
+The look follows the shared NIMVORO base: `src/theme.rs` (copied from `../random_wheel` unchanged), a graphite neutral ramp,
+IBM Plex Sans and Plex Mono (bundled, Latin and Cyrillic), hairline cards and sentence-case headings. Save URLs' own accent is the gold of its folder icon,
+and every link row starts with a domain monogram tile that takes one quiet tint per folder.
 
 ## Languages
 
@@ -108,7 +109,7 @@ The program goes online only for the title of a saved page (on Windows through t
 src/main.rs     start-up, single instance, window, icon (loaded from assets/icon.png)
 src/app.rs      UI: sidebar with folders, list, search, link editor, settings, notices
 src/strings.rs  interface strings (English, Russian, Ukrainian) and the current language
-src/kit.rs      components on top of theme.rs: icons, navigation rows, menus, input fields, dropdowns
+src/kit.rs      components on top of theme.rs: icons, navigation rows, menus, input fields, dropdowns, the monogram tile
 src/theme.rs    shared: light/dark palette, theme mode, widgets
 src/i18n.rs     shared: language, string tables, plurals, language/theme rows
 src/nimvoro.rs  shared: update check and hand-off to the launcher
@@ -120,7 +121,7 @@ src/urlx.rs     finding a link in text, the domain, parsing the title from HTML
 build.rs        embeds assets/icon.ico and version info into the exe (windres for the GNU toolchain, rc.exe for MSVC)
 ```
 
-`theme.rs`, `i18n.rs` and `nimvoro.rs` are shared modules, copied byte for byte into the other Rust tools of the suite. Their API is described in the file headers.
+`theme.rs`, `support.rs`, `i18n.rs`, `nimvoro.rs` and the fonts in `assets/fonts` (IBM Plex, SIL OFL) are shared, copied byte for byte into the other Rust tools of the suite. Their API is described in the file headers.
 
 ## Tests
 

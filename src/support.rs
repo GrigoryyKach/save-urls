@@ -2,6 +2,7 @@
 //!
 //! Copied byte for byte into every Rust (egui) tool of the suite. The strings live in this file
 //! (three languages), the QR code is `assets/support-qr.png` embedded in the exe.
+//! Styling: a card with a hairline, a secondary button, the QR on a white tile.
 //!
 //! ```ignore
 //! mod support;
@@ -15,8 +16,8 @@
 #![allow(dead_code)] // tray_label() is only used by apps with a tray
 
 use crate::i18n::Lang;
-use crate::theme::{self, Pal};
-use eframe::egui::{self, Align2, Color32, ColorImage, CursorIcon, Id, Sense, TextureHandle, TextureOptions, Ui, vec2};
+use crate::theme::{self, Btn, Pal};
+use eframe::egui::{self, Color32, ColorImage, Id, Sense, TextureHandle, TextureOptions, Ui, vec2};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::Command;
@@ -27,6 +28,8 @@ pub const URL: &str = "https://donatello.to/MicsGame";
 const QR_PNG: &[u8] = include_bytes!("../assets/support-qr.png");
 /// Logical size of the QR code on screen.
 const QR_SIZE: f32 = 136.0;
+/// White padding around the code.
+const PAD: f32 = 8.0;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -145,13 +148,15 @@ fn qr_texture(ui: &Ui) -> Option<TextureHandle> {
     Some(tex)
 }
 
-/// Title, text, the accent button and the QR code with its caption.
-/// The caller supplies the surroundings (divider or card).
+/// Title and a card with the text, the button and the QR code.
+/// The caller supplies the surroundings (divider above, spacing below).
 pub fn support_section(ui: &mut Ui, lang: Lang) {
     let p = Pal::of(ui.visuals().dark_mode);
-    theme::caps(ui, strings(lang).title, &p);
-    ui.add_space(2.0);
-    support_body(ui, lang);
+    theme::section(ui, strings(lang).title, &p);
+    theme::card(&p).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        support_body(ui, lang);
+    });
 }
 
 /// Section title, for apps whose settings put their own heading above a card.
@@ -159,58 +164,49 @@ pub fn title(lang: Lang) -> &'static str {
     strings(lang).title
 }
 
-/// Everything except the title: text, button and QR code.
+/// Everything except the title: text, button and QR code. Put it inside a card.
 pub fn support_body(ui: &mut Ui, lang: Lang) {
     let s = strings(lang);
     let p = Pal::of(ui.visuals().dark_mode);
     theme::hint(ui, s.text, &p);
-    ui.add_space(8.0);
-    let font = theme::semi(13.5);
-    let btn_w = ui.painter().layout_no_wrap(s.button.to_string(), font, Color32::WHITE).size().x + 32.0;
-    let qr_w = QR_SIZE + 14.0;
+    ui.add_space(4.0);
+    let font = theme::medium(14.0);
+    let btn_w = ui.painter().layout_no_wrap(s.button.to_string(), font, p.text).size().x + 24.0;
+    let qr_w = QR_SIZE + PAD * 2.0;
     // Side by side when there is room, stacked in a narrow side panel.
-    if ui.available_width() >= btn_w + 14.0 + qr_w {
+    if ui.available_width() >= btn_w + 16.0 + qr_w {
         ui.horizontal_top(|ui| {
-            accent_button(ui, s.button, &p);
-            ui.add_space(14.0);
+            support_button(ui, s.button, &p);
+            ui.add_space(8.0);
             qr_block(ui, s.scan, &p);
         });
     } else {
-        accent_button(ui, s.button, &p);
-        ui.add_space(10.0);
+        support_button(ui, s.button, &p);
         qr_block(ui, s.scan, &p);
     }
-    ui.add_space(4.0);
 }
 
-/// Accent button (brand blue), sized to its text. Opens the donation page.
-fn accent_button(ui: &mut Ui, label: &str, p: &Pal) {
-    let font = theme::semi(13.5);
-    let w = ui.painter().layout_no_wrap(label.to_string(), font.clone(), Color32::WHITE).size().x;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 32.0, 34.0), Sense::click());
-    let fill = if resp.hovered() { theme::mix(p.accent, Color32::WHITE, 0.12) } else { p.accent };
-    ui.painter().rect_filled(rect, 10.0, fill);
-    ui.painter().text(rect.center(), Align2::CENTER_CENTER, label, font, Color32::WHITE);
-    if resp.on_hover_cursor(CursorIcon::PointingHand).clicked() {
+/// Secondary button (the support ask must not compete with the app's primary action). Opens the donation page.
+fn support_button(ui: &mut Ui, label: &str, p: &Pal) {
+    if theme::button(ui, label, Btn::Secondary, p).clicked() {
         open();
     }
 }
 
-/// The QR code on a white rounded card (so it scans in dark mode too) with its caption.
+/// The QR code on a white tile (so it scans in dark mode too), 8px padding, radius 8, with its caption.
 fn qr_block(ui: &mut Ui, caption: &str, p: &Pal) {
     let Some(tex) = qr_texture(ui) else { return };
     ui.vertical(|ui| {
-        let pad = 7.0;
-        let (rect, _) = ui.allocate_exact_size(vec2(QR_SIZE + pad * 2.0, QR_SIZE + pad * 2.0), Sense::hover());
-        ui.painter().rect_filled(rect, 10.0, Color32::WHITE);
+        let side = QR_SIZE + PAD * 2.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+        ui.painter().rect_filled(rect, 8.0, Color32::WHITE);
         // Snap to whole physical pixels so no texel is stretched.
         let ppp = ui.ctx().pixels_per_point();
-        let min = (rect.min + vec2(pad, pad)) * ppp;
+        let min = (rect.min + vec2(PAD, PAD)) * ppp;
         let min = egui::pos2(min.x.round(), min.y.round()) / ppp;
         let img = egui::Rect::from_min_size(min, vec2(QR_SIZE, QR_SIZE));
         ui.painter().image(tex.id(), img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-        ui.add_space(2.0);
-        ui.allocate_ui(vec2(QR_SIZE + pad * 2.0, 16.0), |ui| {
+        ui.allocate_ui(vec2(side, 16.0), |ui| {
             ui.centered_and_justified(|ui| theme::hint(ui, caption, p));
         });
     });

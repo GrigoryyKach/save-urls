@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use eframe::egui::{
     self, Align, Align2, Color32, CursorIcon, DragAndDrop, Frame, Id, Key, Layout, Margin, Modifiers, Order, Popup,
-    Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, Ui, ViewportCommand, pos2,
+    Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, Ui, ViewportCommand, pos2,
     text::{LayoutJob, TextFormat, TextWrapping},
     vec2,
 };
@@ -18,9 +18,12 @@ use crate::search::Query;
 use crate::store::{Added, ClickAction, FolderId, Link, LinkId, Shared, Sort, Store};
 use crate::strings;
 use crate::support;
-use crate::theme::{self, Btn, Pal, Textures};
+use crate::theme::{self, Btn, Pal, Seg};
 use crate::urlx;
 use crate::win::{self, Event, Hub};
+
+/// Save URLs' accent: the gold of the folder in its icon. Light is the darker shade, so it keeps 4.5:1 on the sidebar.
+const ACCENT: theme::Accent = theme::Accent::new(0xe0a82e, 0x946500, 0x141415, 0xffffff);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Page {
@@ -86,8 +89,6 @@ pub struct App {
     store: Shared,
     hub: Arc<Hub>,
     hwnd: isize,
-    tex: Textures,
-    logo_tex: TextureHandle,
     page: Page,
     query: String,
     editor: Option<Editor>,
@@ -157,6 +158,7 @@ fn bookmarks_html(st: &Store) -> String {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, store: Shared, background: bool) -> Self {
         let mode = store.lock().map(|s| s.lib.settings.theme).unwrap_or_default();
+        theme::set_accent(ACCENT);
         theme::install(&cc.egui_ctx, mode);
         let hwnd = match cc.window_handle().map(|h| h.as_raw()) {
             #[cfg(windows)]
@@ -165,11 +167,6 @@ impl App {
         };
         let hub = Arc::new(Hub { store: store.clone(), ctx: cc.egui_ctx.clone(), events: Mutex::new(Vec::new()), clip_url: Mutex::new(None) });
         win::spawn_tray(hub.clone());
-        let logo = match eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
-            Ok(i) => egui::ColorImage::from_rgba_unmultiplied([i.width as usize, i.height as usize], &i.rgba),
-            Err(_) => egui::ColorImage::filled([1, 1], Color32::TRANSPARENT),
-        };
-        let logo_tex = cc.egui_ctx.load_texture("logo", logo, TextureOptions::LINEAR);
         let updater = Updater::new("save-urls", "GrigoryyKach/save-urls", env!("CARGO_PKG_VERSION"));
         if store.lock().map(|s| s.lib.settings.check_updates).unwrap_or(true) {
             let ctx = cc.egui_ctx.clone();
@@ -180,8 +177,6 @@ impl App {
             store,
             hub,
             hwnd,
-            tex: Textures::new(&cc.egui_ctx),
-            logo_tex,
             page: Page::All,
             query: String::new(),
             editor: None,
@@ -333,28 +328,27 @@ impl App {
     fn sidebar(&mut self, ui: &mut Ui, st: &mut Store, p: &Pal) {
         let t = strings::s();
         ui.horizontal(|ui| {
-            kit::logo(ui, 36.0, &self.logo_tex);
-            ui.add_space(4.0);
+            ui.spacing_mut().item_spacing.x = 8.0;
+            theme::mark(ui, 28.0, kit::icon_folder, p);
             ui.vertical(|ui| {
-                ui.add_space(1.0);
-                ui.label(RichText::new("Save URLs").font(theme::semi(15.5)).color(p.text));
-                ui.add_space(-8.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label(RichText::new("Save URLs").font(theme::medium(16.0)).color(p.text));
                 ui.label(RichText::new(t.tagline).font(theme::reg(12.0)).color(p.muted));
             });
         });
-        ui.add_space(18.0);
+        ui.add_space(24.0);
 
         let dragging = DragAndDrop::has_payload_of_type::<LinkDrag>(ui.ctx());
         ui.spacing_mut().item_spacing.y = 2.0;
-        theme::caps(ui, t.library, p);
-        ui.add_space(4.0);
+        theme::section(ui, t.library, p);
+        ui.add_space(6.0);
         let total = st.lib.links.len();
         if kit::nav_row(ui, Id::unique("nav-all"), kit::NavRow { icon: kit::icon_link, label: t.all_links, count: Some(total), active: self.page == Page::All, drop_hover: false }, p).clicked() {
             self.page = Page::All;
         }
         let unsorted = st.count_in(None);
         let resp = ui.push_id("nav-unsorted-row", |ui| {
-            let hover = dragging && ui.rect_contains_pointer(Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 36.0)));
+            let hover = dragging && ui.rect_contains_pointer(Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), kit::NAV_H)));
             kit::nav_row(
                 ui,
                 Id::unique("nav-unsorted"),
@@ -370,11 +364,11 @@ impl App {
             st.move_link(d.0, None);
         }
 
-        ui.add_space(16.0);
+        ui.add_space(22.0);
         ui.horizontal(|ui| {
-            theme::caps(ui, t.folders, p);
+            theme::section(ui, t.folders, p);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(26.0, 22.0), Sense::hover());
+                let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
                 if kit::icon_button(ui, r, Id::unique("add-folder"), kit::icon_plus, t.new_folder, false, p).clicked() {
                     let id = st.add_folder(t.new_folder);
                     self.rename = Some(Rename { id, text: st.folder_name(Some(id)), focus_pending: true });
@@ -382,10 +376,10 @@ impl App {
                 }
             });
         });
-        ui.add_space(4.0);
+        ui.add_space(2.0);
 
         // Folders scroll, "Settings" stays at the bottom.
-        let bottom_h = 46.0;
+        let bottom_h = 48.0;
         let avail = ui.available_height() - bottom_h;
         ScrollArea::vertical().id_salt("folders").max_height(avail.max(60.0)).auto_shrink([false, true]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
@@ -420,7 +414,7 @@ impl App {
                 }
                 let count = st.count_in(Some(fid));
                 let top = ui.cursor().min;
-                let hover = dragging && ui.rect_contains_pointer(Rect::from_min_size(top, vec2(ui.available_width(), 36.0)));
+                let hover = dragging && ui.rect_contains_pointer(Rect::from_min_size(top, vec2(ui.available_width(), kit::NAV_H)));
                 let resp = kit::nav_row(
                     ui,
                     Id::unique(("nav-folder", fid)),
@@ -468,11 +462,11 @@ impl App {
 
         // Bottom of the panel.
         let rest = ui.available_rect_before_wrap();
-        let r = Rect::from_min_max(pos2(rest.left(), rest.bottom() - 38.0), pos2(rest.right(), rest.bottom()));
+        let r = Rect::from_min_max(pos2(rest.left(), rest.bottom() - kit::NAV_H), pos2(rest.right(), rest.bottom()));
         if let UpdateState::Available { version, .. } = self.updater.state() {
-            let r2 = Rect::from_min_max(pos2(rest.left(), r.top() - 40.0), pos2(rest.right(), r.top() - 6.0));
+            let r2 = Rect::from_min_max(pos2(rest.left(), r.top() - 40.0), pos2(rest.right(), r.top() - 8.0));
             let mut up = ui.new_child(egui::UiBuilder::new().max_rect(r2));
-            if theme::button(&mut up, &t.update_available.replace("{v}", &version), Btn::Soft, p).clicked() {
+            if theme::button(&mut up, &t.update_available.replace("{v}", &version), Btn::Secondary, p).clicked() {
                 self.page = Page::Settings;
             }
         }
@@ -496,57 +490,57 @@ impl App {
         };
 
         // Heading and the "Add" button.
-        let head = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::hover()).0;
-        ui.painter().text(head.left_top() + vec2(0.0, 0.0), Align2::LEFT_TOP, &title, theme::bold(26.0), p.text);
+        let head = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::hover()).0;
+        ui.painter().text(head.left_top(), Align2::LEFT_TOP, &title, theme::medium(24.0), p.text);
         let sub = if self.query.trim().is_empty() {
             if total == 0 { t.empty_now.into() } else { pl(total, &t.links) }
         } else {
             t.found.replace("{n}", &ids.len().to_string()).replace("{total}", &total.to_string())
         };
-        ui.painter().text(head.left_top() + vec2(1.0, 34.0), Align2::LEFT_TOP, sub, theme::reg(13.5), p.muted);
-        let brect = Rect::from_min_size(pos2(head.right() - 220.0, head.top() + 4.0), vec2(220.0, 42.0));
-        if theme::gradient_button(ui, brect, Id::unique("add-link"), t.add_link, Some(kit::icon_plus), true, &self.tex, p).clicked() {
+        ui.painter().text(head.left_top() + vec2(0.0, 32.0), Align2::LEFT_TOP, sub, theme::mono(12.0), p.muted);
+        let brect = Rect::from_min_size(pos2(head.right() - 176.0, head.top()), vec2(176.0, 44.0));
+        if theme::primary_button(ui, brect, Id::unique("add-link"), t.add_link, Some(kit::icon_plus), true, p).clicked() {
             let clip = self.hub.clip_url.lock().unwrap().clone().filter(|u| st.find_url(u).is_none());
             self.open_editor(st, None, clip);
         }
-        ui.add_space(12.0);
+        ui.add_space(16.0);
 
         // A link in the clipboard that is not in the library yet.
         let clip = self.hub.clip_url.lock().unwrap().clone().filter(|u| st.find_url(u).is_none());
         if let Some(url) = clip {
-            let r = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover()).0;
+            let r = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::hover()).0;
             let painter = ui.painter();
-            painter.rect(r, 12.0, p.accent_soft, Stroke::NONE, StrokeKind::Inside);
-            kit::icon_clipboard(painter, pos2(r.left() + 22.0, r.center().y), p.accent);
-            let bw = 120.0;
-            let clip_r = Rect::from_min_max(pos2(r.left() + 42.0, r.top()), pos2(r.right() - bw - 130.0, r.bottom()));
+            painter.rect(r, 12.0, p.card, Stroke::new(1.0, p.line_hi), StrokeKind::Inside);
+            kit::icon_clipboard(painter, pos2(r.left() + 24.0, r.center().y), p.text2);
+            let bw = 96.0;
+            let clip_r = Rect::from_min_max(pos2(r.left() + 44.0, r.top()), pos2(r.right() - bw - 152.0, r.bottom()));
             let mut job = LayoutJob::default();
-            job.append(t.in_clipboard, 0.0, TextFormat { font_id: theme::reg(13.5), color: p.muted, ..Default::default() });
-            job.append(&urlx::pretty(&url), 0.0, TextFormat { font_id: theme::semi(13.5), color: p.text, ..Default::default() });
+            job.append(t.in_clipboard, 0.0, TextFormat { font_id: theme::reg(13.0), color: p.text2, ..Default::default() });
+            job.append(&urlx::pretty(&url), 0.0, TextFormat { font_id: theme::mono(12.0), color: p.text, ..Default::default() });
             job.wrap = TextWrapping { max_width: clip_r.width(), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
             let g = painter.layout_job(job);
             painter.galley(pos2(clip_r.left(), r.center().y - g.size().y / 2.0), g, p.text);
-            let save_r = Rect::from_min_size(pos2(r.right() - bw - 8.0, r.top() + 7.0), vec2(bw, 32.0));
-            if theme::button_at(ui, save_r, Id::unique("clip-save"), t.save, Btn::Soft, p).clicked() {
+            let save_r = Rect::from_min_size(pos2(r.right() - bw - 8.0, r.top() + 8.0), vec2(bw, 32.0));
+            if theme::button_at(ui, save_r, Id::unique("clip-save"), t.save, Btn::Secondary, p).clicked() {
                 self.quick_save(st, &url, now);
             }
-            let edit_r = Rect::from_min_size(pos2(save_r.left() - 126.0, r.top() + 7.0), vec2(120.0, 32.0));
+            let edit_r = Rect::from_min_size(pos2(save_r.left() - 144.0, r.top() + 8.0), vec2(136.0, 32.0));
             if theme::button_at(ui, edit_r, Id::unique("clip-edit"), t.with_description, Btn::Link, p).clicked() {
                 self.open_editor(st, None, Some(url.clone()));
             }
-            ui.add_space(10.0);
+            ui.add_space(12.0);
         }
 
         // Search and sorting.
         ui.horizontal(|ui| {
             let sort_w = 210.0;
-            ui.allocate_ui(vec2(ui.available_width() - sort_w - 8.0, 38.0), |ui| {
+            ui.allocate_ui(vec2(ui.available_width() - sort_w - 8.0, 36.0), |ui| {
                 let resp = kit::text_field(ui, &mut self.query, t.search_ph, Some(kit::icon_search), Id::unique("search"), p);
                 if resp.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
                     self.query.clear();
                 }
                 if !self.query.is_empty() {
-                    let r = Rect::from_center_size(pos2(resp.rect.right() - 10.0, resp.rect.center().y), vec2(26.0, 26.0));
+                    let r = Rect::from_center_size(pos2(resp.rect.right() - 10.0, resp.rect.center().y), vec2(28.0, 28.0));
                     if kit::icon_button(ui, r, Id::unique("search-clear"), kit::icon_close, t.clear_esc, false, p).clicked() {
                         self.query.clear();
                     }
@@ -577,7 +571,7 @@ impl App {
         let mut action: Option<(LinkId, &'static str, Option<Option<FolderId>>)> = None;
         ScrollArea::vertical().id_salt(("links", self.page_key())).auto_shrink([false; 2]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
-            ui.set_width(ui.available_width() - 6.0);
+            ui.set_width(ui.available_width() - 8.0);
             for id in &ids {
                 let Some(link) = st.link(*id) else { continue };
                 if let Some(a) = link_card(ui, link, &q, show_folder, st.folder_name(link.folder), &folders, p) {
@@ -616,12 +610,8 @@ impl App {
     }
 
     fn empty_state(&mut self, ui: &mut Ui, st: &mut Store, p: &Pal, total: usize) {
-        let r = ui.allocate_exact_size(vec2(ui.available_width(), 170.0), Sense::hover()).0;
-        let stroke = Stroke::new(1.0, p.line);
-        let c = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-        for k in 0..4 {
-            ui.painter().extend(egui::Shape::dashed_line(&[c[k], c[k + 1]], stroke, 6.0, 4.0));
-        }
+        let r = ui.allocate_exact_size(vec2(ui.available_width() - 8.0, 168.0), Sense::hover()).0;
+        ui.painter().rect(r, 12.0, p.card, Stroke::new(1.0, p.line), StrokeKind::Inside);
         let t = strings::s();
         let (head, body) = if !self.query.trim().is_empty() {
             (t.nothing_found.to_string(), t.nothing_found_hint.to_string())
@@ -630,8 +620,8 @@ impl App {
         } else {
             (t.empty_folder.to_string(), t.empty_folder_hint.to_string())
         };
-        ui.painter().text(r.center() - vec2(0.0, 14.0), Align2::CENTER_CENTER, head, theme::semi(16.0), p.text);
-        let g = ui.painter().layout(body, theme::reg(13.5), p.muted, (r.width() - 60.0).min(520.0));
+        ui.painter().text(r.center() - vec2(0.0, 14.0), Align2::CENTER_CENTER, head, theme::medium(16.0), p.text);
+        let g = ui.painter().layout(body, theme::reg(13.0), p.text2, (r.width() - 64.0).min(520.0));
         ui.painter().galley(pos2(r.center().x - g.size().x / 2.0, r.center().y + 6.0), g, p.muted);
     }
 
@@ -643,17 +633,16 @@ impl App {
         ScrollArea::vertical().id_salt("settings").auto_shrink([false; 2]).show(ui, |ui| {
             let w = ui.available_width().min(680.0);
             ui.set_width(w);
-            ui.label(RichText::new(t.settings).font(theme::bold(26.0)).color(p.text));
-            ui.add_space(-4.0);
-            ui.label(RichText::new(t.settings_sub).font(theme::reg(13.5)).color(p.muted));
-            ui.add_space(14.0);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.label(RichText::new(t.settings).font(theme::medium(24.0)).color(p.text));
+            theme::hint(ui, t.settings_sub, p);
+            ui.add_space(16.0);
 
             let mut changed = false;
             let mut hotkey_changed = false;
 
-            theme::caps(ui, t.sec_appearance, p);
-            ui.add_space(2.0);
-            kit::card_frame(p).show(ui, |ui| {
+            theme::section(ui, t.sec_appearance, p);
+            theme::card(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let mut lang = strings::lang();
                 if i18n::language_row(ui, &mut lang, p) {
@@ -672,27 +661,18 @@ impl App {
                 }
             });
             ui.add_space(16.0);
-
-            theme::caps(ui, t.sec_tray, p);
-            ui.add_space(2.0);
-            kit::card_frame(p).show(ui, |ui| {
+            theme::section(ui, t.sec_tray, p);
+            theme::card(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 380.0).max(160.0));
-                        ui.label(RichText::new(t.click_title).font(theme::reg(14.0)).color(p.text));
-                        ui.add_space(-6.0);
-                        theme::hint(ui, t.click_hint, p);
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let sel = if st.lib.settings.click == ClickAction::Save { 0 } else { 1 };
-                        // In right_to_left the segments are drawn as usual: the layout only affects the position.
-                        if let Some(i) = kit::segmented(ui, &[t.click_save, t.click_open], sel, p) {
-                            st.lib.settings.click = if i == 0 { ClickAction::Save } else { ClickAction::Open };
-                            changed = true;
-                            hotkey_changed = true;
-                        }
-                    });
+                let segs = [Seg { label: t.click_save, icon: None }, Seg { label: t.click_open, icon: None }];
+                let seg_w = theme::segmented_width(ui, &segs, p);
+                kit::setting_row(ui, p, t.click_title, t.click_hint, seg_w, |ui| {
+                    let sel = if st.lib.settings.click == ClickAction::Save { 0 } else { 1 };
+                    if let Some(i) = theme::segmented(ui, &segs, sel, p) {
+                        st.lib.settings.click = if i == 0 { ClickAction::Save } else { ClickAction::Open };
+                        changed = true;
+                        hotkey_changed = true;
+                    }
                 });
                 theme::divider(ui, p);
                 let mut hk = st.lib.settings.hotkey;
@@ -702,7 +682,7 @@ impl App {
                     hotkey_changed = true;
                 }
                 if hk && !win::HOTKEY_OK.load(std::sync::atomic::Ordering::SeqCst) {
-                    ui.label(RichText::new(t.hotkey_busy).font(theme::reg(12.5)).color(kit::DANGER));
+                    ui.label(RichText::new(t.hotkey_busy).font(theme::reg(12.0)).color(kit::danger(p)));
                 }
                 theme::divider(ui, p);
                 let mut n = st.lib.settings.notify;
@@ -712,10 +692,8 @@ impl App {
                 }
             });
             ui.add_space(16.0);
-
-            theme::caps(ui, t.sec_new, p);
-            ui.add_space(2.0);
-            kit::card_frame(p).show(ui, |ui| {
+            theme::section(ui, t.sec_new, p);
+            theme::card(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let mut f = st.lib.settings.fetch_titles;
                 if kit::switch_row(
@@ -729,40 +707,30 @@ impl App {
                     changed = true;
                 }
                 theme::divider(ui, p);
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 250.0).max(160.0));
-                        ui.label(RichText::new(t.default_folder).font(theme::reg(14.0)).color(p.text));
-                        ui.add_space(-6.0);
-                        theme::hint(ui, t.default_folder_hint, p);
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let cur = st.lib.settings.default_folder;
-                        let label = st.folder_name(cur);
-                        let resp = kit::dropdown_button(ui, &label, Some(kit::icon_folder), 240.0, Id::unique("default-folder"), p);
-                        let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
-                        Popup::menu(&resp).frame(kit::menu_frame(p)).width(240.0).show(|ui| {
-                            if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), cur.is_none(), false, p).clicked() {
-                                st.lib.settings.default_folder = None;
+                kit::setting_row(ui, p, t.default_folder, t.default_folder_hint, 240.0, |ui| {
+                    let cur = st.lib.settings.default_folder;
+                    let label = st.folder_name(cur);
+                    let resp = kit::dropdown_button(ui, &label, Some(kit::icon_folder), 240.0, Id::unique("default-folder"), p);
+                    let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
+                    Popup::menu(&resp).frame(kit::menu_frame(p)).width(240.0).show(|ui| {
+                        if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), cur.is_none(), false, p).clicked() {
+                            st.lib.settings.default_folder = None;
+                            changed = true;
+                            ui.close();
+                        }
+                        for (id, name) in &folders {
+                            if kit::menu_item(ui, name, Some(kit::icon_folder), cur == Some(*id), false, p).clicked() {
+                                st.lib.settings.default_folder = Some(*id);
                                 changed = true;
                                 ui.close();
                             }
-                            for (id, name) in &folders {
-                                if kit::menu_item(ui, name, Some(kit::icon_folder), cur == Some(*id), false, p).clicked() {
-                                    st.lib.settings.default_folder = Some(*id);
-                                    changed = true;
-                                    ui.close();
-                                }
-                            }
-                        });
+                        }
                     });
                 });
             });
             ui.add_space(16.0);
-
-            theme::caps(ui, t.sec_system, p);
-            ui.add_space(2.0);
-            kit::card_frame(p).show(ui, |ui| {
+            theme::section(ui, t.sec_system, p);
+            theme::card(p).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let mut a = self.autostart;
                 if kit::switch_row(ui, p, t.autostart_title, t.autostart_hint, &mut a) {
@@ -774,23 +742,23 @@ impl App {
                     }
                 }
                 if self.autostart_error {
-                    ui.label(RichText::new(t.autostart_error).font(theme::reg(12.5)).color(kit::DANGER));
+                    ui.label(RichText::new(t.autostart_error).font(theme::reg(12.0)).color(kit::danger(p)));
                 }
                 theme::divider(ui, p);
                 ui.label(RichText::new(t.lib_file).font(theme::reg(14.0)).color(p.text));
-                ui.add_space(-6.0);
                 let path = st.path().cloned();
                 let path_text = path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| t.unknown.into());
-                theme::hint(ui, &format!("{path_text} · {}, {}", pl(st.lib.links.len(), &t.links), pl(st.lib.folders.len(), &t.folders_pl)), p);
-                ui.add_space(6.0);
+                ui.add(egui::Label::new(RichText::new(path_text).font(theme::mono(12.0)).color(p.muted)).wrap());
+                theme::hint(ui, &format!("{}, {}", pl(st.lib.links.len(), &t.links), pl(st.lib.folders.len(), &t.folders_pl)), p);
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if theme::button(ui, t.open_folder, Btn::Soft, p).clicked()
+                    if theme::button(ui, t.open_folder, Btn::Secondary, p).clicked()
                         && let Some(dir) = path.as_ref().and_then(|p| p.parent())
                     {
                         let _ = std::fs::create_dir_all(dir);
                         win::open_folder(dir);
                     }
-                    if theme::button(ui, t.export, Btn::Ghost, p)
+                    if theme::button(ui, t.export, Btn::Secondary, p)
                         .on_hover_text(t.export_tip)
                         .clicked()
                     {
@@ -803,12 +771,11 @@ impl App {
                     st.lib.settings.check_updates = cu;
                     changed = true;
                 }
-                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     theme::hint(ui, &self.updater.status_text(strings::lang()), p);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if let UpdateState::Available { .. } = self.updater.state() {
-                            if theme::button(ui, nt.update_btn, Btn::Soft, p).clicked() && self.updater.apply() {
+                            if theme::button(ui, nt.update_btn, Btn::Secondary, p).clicked() && self.updater.apply() {
                                 st.save_now();
                                 win::post_tray(win::WM_APP_QUIT);
                             }
@@ -819,26 +786,19 @@ impl App {
                     });
                 });
                 theme::divider(ui, p);
-                support::support_section(ui, strings::lang());
+                theme::section(ui, support::title(strings::lang()), p);
+                support::support_body(ui, strings::lang());
                 theme::divider(ui, p);
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 160.0).max(160.0));
-                        ui.label(RichText::new(t.quit_title).font(theme::reg(14.0)).color(p.text));
-                        ui.add_space(-6.0);
-                        theme::hint(ui, t.quit_hint, p);
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if theme::button(ui, t.quit, Btn::Ghost, p).clicked() {
-                            st.save_now();
-                            win::post_tray(win::WM_APP_QUIT);
-                        }
-                    });
+                kit::setting_row(ui, p, t.quit_title, t.quit_hint, 80.0, |ui| {
+                    if theme::button(ui, t.quit, Btn::Secondary, p).clicked() {
+                        st.save_now();
+                        win::post_tray(win::WM_APP_QUIT);
+                    }
                 });
             });
             ui.add_space(16.0);
             theme::hint(ui, t.keys_hint, p);
-            ui.add_space(12.0);
+            ui.add_space(16.0);
 
             if changed {
                 st.touch();
@@ -882,23 +842,23 @@ impl App {
             .frame(
                 Frame::new()
                     .fill(p.card)
-                    .stroke(Stroke::new(1.0, p.line))
-                    .corner_radius(20)
-                    .inner_margin(Margin::symmetric(28, 24))
-                    .shadow(theme::shadow(20, 60, Color32::from_black_alpha(90))),
+                    .stroke(Stroke::new(1.0, p.line_hi))
+                    .corner_radius(theme::R_WINDOW)
+                    .inner_margin(Margin::same(24))
+                    .shadow(theme::shadow_for(p)),
             )
             .show(ctx, |ui| {
                 ui.set_width(480.0);
-                ui.spacing_mut().item_spacing.y = 6.0;
+                ui.spacing_mut().item_spacing.y = 8.0;
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(if ed.id.is_some() { t.link } else { t.new_link }).font(theme::bold(21.0)).color(p.text));
+                    ui.label(RichText::new(if ed.id.is_some() { t.link } else { t.new_link }).font(theme::medium(20.0)).color(p.text));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let (r, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
+                        let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
                         if kit::icon_button(ui, r, Id::unique("ed-close"), kit::icon_close, t.close_esc, false, p).clicked() {
                             close = true;
                         }
                         if let Some(id) = ed.id {
-                            let (r, _) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
+                            let (r, _) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
                             if kit::icon_button(ui, r, Id::unique("ed-open"), kit::icon_external, t.open_browser, false, p).clicked() {
                                 win::open_url(&ed.url);
                             }
@@ -908,8 +868,8 @@ impl App {
                 });
                 ui.add_space(8.0);
 
-                theme::caps(ui, t.address, p);
-                let url_resp = kit::text_field(ui, &mut ed.url, "https://…", Some(kit::icon_link), Id::unique("ed-url"), p);
+                theme::section(ui, t.address, p);
+                let url_resp = kit::text_field(ui, &mut ed.url, "https://", Some(kit::icon_link), Id::unique("ed-url"), p);
                 if ed.focus_pending {
                     if ed.url.trim().is_empty() {
                         url_resp.request_focus();
@@ -918,13 +878,13 @@ impl App {
                     }
                     ed.focus_pending = false;
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
-                    theme::caps(ui, t.title, p);
+                    theme::section(ui, t.title, p);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ed.fetch.is_some() {
-                            ui.label(RichText::new(t.loading).font(theme::reg(12.5)).color(p.muted));
+                            ui.label(RichText::new(t.loading).font(theme::reg(12.0)).color(p.muted));
                         } else if theme::button(ui, t.take_from_site, Btn::Link, p).clicked() {
                             match urlx::extract_url(&ed.url) {
                                 Some(u) => {
@@ -945,13 +905,13 @@ impl App {
                 });
                 let hint = if ed.id.is_none() && fetch_on { t.title_auto } else { t.title_ph };
                 let title_resp = kit::text_field(ui, &mut ed.title, hint, None, Id::unique("ed-title"), p);
-                ui.add_space(6.0);
+                ui.add_space(8.0);
 
-                theme::caps(ui, t.description, p);
+                theme::section(ui, t.description, p);
                 kit::multiline_field(ui, &mut ed.desc, t.description_ph, 3, Id::unique("ed-desc"), p);
-                ui.add_space(6.0);
+                ui.add_space(8.0);
 
-                theme::caps(ui, t.folder, p);
+                theme::section(ui, t.folder, p);
                 let resp = kit::dropdown_button(ui, &folder_label, Some(if ed.folder.is_some() { kit::icon_folder } else { kit::icon_inbox }), ui.available_width(), Id::unique("ed-folder"), p);
                 Popup::menu(&resp).frame(kit::menu_frame(p)).width(resp.rect.width()).show(|ui| {
                     if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), ed.folder.is_none(), false, p).clicked() {
@@ -967,8 +927,7 @@ impl App {
                 });
 
                 if let Some(err) = &ed.error {
-                    ui.add_space(2.0);
-                    ui.label(RichText::new(err).font(theme::reg(13.0)).color(kit::DANGER));
+                    ui.label(RichText::new(err).font(theme::reg(13.0)).color(kit::danger(p)));
                 }
                 ui.add_space(16.0);
 
@@ -978,22 +937,22 @@ impl App {
                     save = true;
                 }
 
-                let h = 42.0;
+                let h = Btn::Primary.height();
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
-                let save_r = Rect::from_min_max(pos2(row.right() - 150.0, row.top()), row.max);
-                let cancel_r = Rect::from_min_size(pos2(save_r.left() - 118.0, row.top()), vec2(110.0, h));
-                if theme::gradient_button(ui, save_r, Id::unique("ed-save"), if ed.id.is_some() { t.save } else { t.add }, None, true, &self.tex, p).clicked() {
+                let save_r = Rect::from_min_max(pos2(row.right() - 112.0, row.top()), row.max);
+                let cancel_r = Rect::from_min_size(pos2(save_r.left() - 104.0, row.top()), vec2(96.0, h));
+                if theme::button_at(ui, save_r, Id::unique("ed-save"), if ed.id.is_some() { t.save } else { t.add }, Btn::Primary, p).clicked() {
                     save = true;
                 }
-                if theme::button_at(ui, cancel_r, Id::unique("ed-cancel"), t.cancel, Btn::Ghost, p).clicked() {
+                if theme::button_at(ui, cancel_r, Id::unique("ed-cancel"), t.cancel, Btn::Secondary, p).clicked() {
                     close = true;
                 }
                 if ed.id.is_some() {
-                    let del_r = Rect::from_min_size(row.min, vec2(100.0, h));
+                    let del_r = Rect::from_min_size(row.min, vec2(96.0, h));
                     let resp = ui.interact(del_r, Id::unique("ed-del"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
-                    let col = if resp.hovered() { kit::DANGER } else { kit::DANGER.gamma_multiply(0.85) };
-                    kit::icon_trash(ui.painter(), pos2(del_r.left() + 10.0, del_r.center().y), col);
-                    ui.painter().text(pos2(del_r.left() + 24.0, del_r.center().y), Align2::LEFT_CENTER, t.delete, theme::semi(13.5), col);
+                    let col = theme::mix(kit::danger(p).gamma_multiply(0.85), kit::danger(p), theme::fade(ui, Id::unique("ed-del-fade"), resp.hovered()));
+                    kit::icon_trash(ui.painter(), pos2(del_r.left() + 8.0, del_r.center().y), col);
+                    ui.painter().text(pos2(del_r.left() + 24.0, del_r.center().y), Align2::LEFT_CENTER, t.delete, theme::medium(14.0), col);
                     if resp.clicked() {
                         delete = true;
                     }
@@ -1079,25 +1038,35 @@ impl App {
         let mut confirm = false;
         let modal = egui::Modal::new(Id::unique("confirm"))
             .backdrop_color(Color32::from_black_alpha(130))
-            .frame(Frame::new().fill(p.card).stroke(Stroke::new(1.0, p.line)).corner_radius(20).inner_margin(Margin::symmetric(28, 24)))
+            .frame(
+                Frame::new()
+                    .fill(p.card)
+                    .stroke(Stroke::new(1.0, p.line_hi))
+                    .corner_radius(theme::R_WINDOW)
+                    .inner_margin(Margin::same(24))
+                    .shadow(theme::shadow_for(p)),
+            )
             .show(ctx, |ui| {
                 ui.set_width(400.0);
-                ui.label(RichText::new(t.delete_folder_q.replace("{name}", &name)).font(theme::bold(19.0)).color(p.text));
+                ui.spacing_mut().item_spacing.y = 8.0;
+                ui.label(RichText::new(t.delete_folder_q.replace("{name}", &name)).font(theme::medium(20.0)).color(p.text));
                 let body = if n == 0 { t.folder_is_empty.to_string() } else { t.links_move_out.replace("{links}", &pl(n, &t.links)) };
                 theme::hint(ui, &body, p);
                 ui.add_space(16.0);
-                let h = 40.0;
+                let h = Btn::Primary.height();
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
-                let del_r = Rect::from_min_max(pos2(row.right() - 150.0, row.top()), row.max);
-                let cancel_r = Rect::from_min_size(pos2(del_r.left() - 118.0, row.top()), vec2(110.0, h));
+                let del_r = Rect::from_min_max(pos2(row.right() - 112.0, row.top()), row.max);
+                let cancel_r = Rect::from_min_size(pos2(del_r.left() - 104.0, row.top()), vec2(96.0, h));
                 let resp = ui.interact(del_r, Id::unique("cf-del"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
-                let fill = if resp.hovered() { theme::mix(kit::DANGER, Color32::BLACK, 0.1) } else { kit::DANGER };
-                ui.painter().rect_filled(del_r, 12.0, fill);
-                ui.painter().text(del_r.center(), Align2::CENTER_CENTER, t.delete, theme::semi(14.5), Color32::WHITE);
+                let hov = theme::fade(ui, Id::unique("cf-del-fade"), resp.hovered());
+                let toward = if p.dark { Color32::WHITE } else { Color32::BLACK };
+                let fill = theme::mix(kit::danger(p), toward, 0.08 * hov);
+                ui.painter().rect_filled(del_r, theme::R_CONTROL as f32, fill);
+                ui.painter().text(del_r.center(), Align2::CENTER_CENTER, t.delete, theme::medium(14.0), kit::on_danger(p));
                 if resp.clicked() {
                     confirm = true;
                 }
-                if theme::button_at(ui, cancel_r, Id::unique("cf-cancel"), t.cancel, Btn::Ghost, p).clicked() {
+                if theme::button_at(ui, cancel_r, Id::unique("cf-cancel"), t.cancel, Btn::Secondary, p).clicked() {
                     close = true;
                 }
             });
@@ -1132,27 +1101,23 @@ impl App {
         let mut edit = None;
         egui::Area::new(Id::unique("toast"))
             .order(Order::Foreground)
-            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -24.0 + (1.0 - a) * 12.0))
+            .anchor(Align2::CENTER_BOTTOM, vec2(0.0, -24.0 + (1.0 - a) * 8.0))
             .show(ctx, |ui| {
                 ui.multiply_opacity(a);
                 Frame::new()
-                    .fill(if p.dark { theme::hex(0x2a2f3a) } else { theme::hex(0x1f232b) })
-                    .corner_radius(14)
-                    .inner_margin(Margin { left: 18, right: 10, top: 8, bottom: 8 })
-                    .shadow(theme::shadow(8, 24, Color32::from_black_alpha(70)))
+                    .fill(p.card)
+                    .stroke(Stroke::new(1.0, p.line_hi))
+                    .corner_radius(theme::R_CARD)
+                    .inner_margin(Margin { left: 16, right: 8, top: 8, bottom: 8 })
+                    .shadow(theme::shadow_for(p))
                     .show(ui, |ui| {
                         ui.set_max_width(screen.width() - 80.0);
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&t.text).font(theme::reg(13.5)).color(Color32::WHITE));
-                            ui.add_space(6.0);
+                            ui.label(RichText::new(&t.text).font(theme::reg(14.0)).color(p.text));
+                            ui.add_space(8.0);
                             let label = if t.undo.is_some() { Some(tr.undo) } else if t.edit.is_some() { Some(tr.edit) } else { None };
                             if let Some(label) = label {
-                                let g = ui.painter().layout_no_wrap(label.into(), theme::semi(13.5), Color32::WHITE);
-                                let (r, resp) = ui.allocate_exact_size(g.size() + vec2(20.0, 12.0), Sense::click());
-                                let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
-                                ui.painter().rect_filled(r, 8.0, Color32::from_white_alpha(if resp.hovered() { 40 } else { 22 }));
-                                ui.painter().galley(r.center() - g.size() / 2.0, g, Color32::WHITE);
-                                if resp.clicked() {
+                                if theme::button(ui, label, Btn::Small, p).clicked() {
                                     if t.undo.is_some() {
                                         undo = true;
                                     } else {
@@ -1212,22 +1177,26 @@ impl App {
         }
         self.handle_keys(&ctx, st, now);
 
-        egui::Panel::left("sidebar")
+        let side = egui::Panel::left("sidebar")
             .exact_size(264.0)
             .resizable(false)
-            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin { left: 16, right: 16, top: 20, bottom: 14 }))
+            .show_separator_line(false)
+            .frame(Frame::new().fill(p.sidebar).stroke(Stroke::NONE).inner_margin(Margin { left: 16, right: 16, top: 20, bottom: 16 }))
             .show(ui, |ui| self.sidebar(ui, st, p));
+        // Hairline between the sidebar and the page.
+        let edge = side.response.rect;
+        ui.painter().vline(edge.right() - 0.5, edge.y_range(), Stroke::new(1.0, p.line));
         egui::CentralPanel::default()
-            .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 32, right: 26, top: 22, bottom: 0 }))
+            .frame(Frame::new().fill(p.bg).inner_margin(Margin { left: 32, right: 24, top: 24, bottom: 0 }))
             .show(ui, |ui| {
                 if let Some(err) = st.load_error.clone().map(|e| strings::s().library_broken.replace("{e}", &e.detail).replace("{name}", &e.backup)) {
                     let r = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover()).0;
-                    ui.painter().rect_filled(r, 10.0, kit::DANGER.gamma_multiply(0.15));
-                    ui.painter().text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, win::ellipsize(&err, 120), theme::reg(13.0), kit::DANGER);
+                    ui.painter().rect(r, theme::R_CONTROL as f32, theme::alpha(kit::danger(p), 28), Stroke::new(1.0, theme::alpha(kit::danger(p), 120)), StrokeKind::Inside);
+                    ui.painter().text(pos2(r.left() + 16.0, r.center().y), Align2::LEFT_CENTER, win::ellipsize(&err, 120), theme::reg(13.0), p.text);
                     if ui.interact(r, Id::unique("load-err"), Sense::click()).clicked() {
                         st.load_error = None;
                     }
-                    ui.add_space(10.0);
+                    ui.add_space(12.0);
                 }
                 if self.page == Page::Settings {
                     self.settings(ui, st, p);
@@ -1243,11 +1212,11 @@ impl App {
         {
             ctx.set_cursor_icon(CursorIcon::Grabbing);
             let painter = ctx.layer_painter(egui::LayerId::new(Order::Tooltip, Id::unique("drag-ghost")));
-            let g = painter.layout_no_wrap(win::ellipsize(&l.title, 40), theme::semi(13.0), Color32::WHITE);
-            let r = Rect::from_min_size(pos + vec2(14.0, 10.0), g.size() + vec2(24.0, 14.0));
-            painter.add(theme::shadow(6, 18, Color32::from_black_alpha(60)).as_shape(r, 10.0));
-            theme::gradient_rect(&painter, r, 10.0, &self.tex.accent);
-            painter.galley(r.min + vec2(12.0, 7.0), g, Color32::WHITE);
+            let g = painter.layout_no_wrap(win::ellipsize(&l.title, 40), theme::medium(13.0), p.text);
+            let r = Rect::from_min_size(pos + vec2(12.0, 8.0), g.size() + vec2(24.0, 16.0));
+            painter.add(theme::shadow_for(p).as_shape(r, 8.0));
+            painter.rect(r, theme::R_CONTROL as f32, p.raised_hi, Stroke::new(1.0, p.line_hi), StrokeKind::Inside);
+            painter.galley(r.min + vec2(12.0, 8.0), g, p.text);
         }
 
         self.editor_modal(&ctx, st, p, now);
@@ -1268,19 +1237,19 @@ fn link_card(
 ) -> Option<(&'static str, Option<Option<FolderId>>)> {
     let t = strings::s();
     let w = ui.available_width();
-    let pad = 14.0;
-    let badge = 38.0;
-    let x0 = pad + badge + 14.0;
-    let right_w = 150.0;
+    let pad = 16.0;
+    let badge = 36.0;
+    let x0 = pad + badge + 12.0;
+    let right_w = 160.0;
     let text_w = (w - x0 - right_w - pad).max(120.0);
 
     let desc = l.description.trim();
     let desc_galley = (!desc.is_empty()).then(|| {
-        let mut job = highlighted(desc, q, theme::reg(13.0), theme::mix(p.muted, p.text, 0.35), p);
-        job.wrap = TextWrapping { max_width: w - x0 - pad - 8.0, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
+        let mut job = highlighted(desc, q, theme::reg(13.0), p.text2, p);
+        job.wrap = TextWrapping { max_width: w - x0 - pad, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
         ui.painter().layout_job(job)
     });
-    let h = 62.0 + desc_galley.as_ref().map_or(0.0, |g| g.size().y + 4.0);
+    let h = 64.0 + desc_galley.as_ref().map_or(0.0, |g| g.size().y + 4.0);
     let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
     if !ui.is_rect_visible(rect) {
         return None;
@@ -1293,41 +1262,35 @@ fn link_card(
     // Not `resp.hovered()`: over the action buttons the buttons take the hover themselves,
     // the card stops counting as hovered and the buttons vanish before they can be clicked.
     let hovered = ui.rect_contains_pointer(rect) || resp.context_menu_opened();
+    let hot = theme::fade(ui, id.with("hover"), hovered);
     let mut out = None;
 
     let painter = ui.painter();
-    let fill = if hovered { theme::mix(p.card, p.accent, if p.dark { 0.06 } else { 0.03 }) } else { p.card };
-    let stroke = if hovered { theme::mix(p.line, p.accent, 0.45) } else { p.line };
-    if hovered && !p.dark {
-        painter.add(theme::shadow(4, 14, Color32::from_black_alpha(14)).as_shape(rect, 14.0));
-    }
-    painter.rect(rect, 14.0, fill, Stroke::new(1.0, stroke), StrokeKind::Inside);
+    painter.rect(rect, theme::R_CARD as f32, theme::mix(p.card, p.raised, hot), Stroke::new(1.0, theme::mix(p.line, p.line_hi, hot)), StrokeKind::Inside);
 
-    // Site badge.
+    // Domain monogram: one quiet tint per folder.
     let domain = urlx::domain(&l.url);
-    let br = Rect::from_min_size(rect.min + vec2(pad, 12.0), vec2(badge, badge));
-    let bc = kit::badge_color(&domain);
-    painter.rect_filled(br, 11.0, bc);
-    painter.text(br.center(), Align2::CENTER_CENTER, kit::badge_letter(&domain), theme::bold(17.0), Color32::WHITE);
+    let br = Rect::from_min_size(rect.min + vec2(pad, 14.0), vec2(badge, badge));
+    kit::monogram(painter, br, &kit::badge_letter(&domain), l.folder, p);
 
     // Title and address.
-    let mut tj = highlighted(&l.title, q, theme::semi(14.5), p.text, p);
+    let mut tj = highlighted(&l.title, q, theme::medium(14.0), p.text, p);
     tj.wrap = TextWrapping { max_width: text_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     let tg = painter.layout_job(tj);
-    painter.galley(rect.min + vec2(x0, 11.0), tg, p.text);
-    let mut uj = highlighted(&urlx::pretty(&l.url), q, theme::reg(12.5), p.muted, p);
+    painter.galley(rect.min + vec2(x0, 12.0), tg, p.text);
+    let mut uj = highlighted(&urlx::pretty(&l.url), q, theme::mono(12.0), p.muted, p);
     uj.wrap = TextWrapping { max_width: text_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
     let ug = painter.layout_job(uj);
     painter.galley(rect.min + vec2(x0, 34.0), ug, p.muted);
     if let Some(g) = desc_galley {
-        painter.galley(rect.min + vec2(x0, 58.0), g, p.muted);
+        painter.galley(rect.min + vec2(x0, 58.0), g, p.text2);
     }
 
     // On the right: date and folder, buttons on hover.
     if hovered {
-        let size = 30.0;
+        let size = 28.0;
         let mut x = rect.right() - pad - size;
-        let y = rect.top() + 11.0;
+        let y = rect.top() + 12.0;
         let buttons: [(IconFn, &str, &'static str, bool); 4] = [
             (kit::icon_trash, t.delete, "delete", true),
             (kit::icon_edit, t.edit_tip, "edit", false),
@@ -1342,13 +1305,12 @@ fn link_card(
             x -= size + 4.0;
         }
     } else {
-        painter.text(pos2(rect.right() - pad, rect.top() + 14.0), Align2::RIGHT_TOP, fmt_date(l.added), theme::reg(12.0), p.muted);
+        painter.text(pos2(rect.right() - pad, rect.top() + 12.0), Align2::RIGHT_TOP, fmt_date(l.added), theme::mono(12.0), p.muted);
         if show_folder && l.folder.is_some() {
             let g = painter.layout_no_wrap(win::ellipsize(&folder_name, 18), theme::reg(12.0), p.muted);
-            let fr = Rect::from_min_size(pos2(rect.right() - pad - g.size().x - 30.0, rect.top() + 34.0), vec2(g.size().x + 30.0, 20.0));
-            painter.rect_filled(fr, 10.0, p.hover);
-            kit::icon_folder(&painter.with_clip_rect(fr), pos2(fr.left() + 13.0, fr.center().y), p.muted);
-            painter.galley(pos2(fr.left() + 24.0, fr.center().y - g.size().y / 2.0), g, p.muted);
+            let right = rect.right() - pad;
+            kit::icon_folder(&painter.with_clip_rect(rect), pos2(right - g.size().x - 16.0, rect.top() + 42.0), p.muted);
+            painter.galley(pos2(right - g.size().x, rect.top() + 42.0 - g.size().y / 2.0), g, p.muted);
         }
     }
 
@@ -1371,7 +1333,7 @@ fn link_card(
             ui.close();
         }
         kit::menu_separator(ui, p);
-        ui.label(RichText::new(t.move_to).font(theme::semi(11.0)).color(p.muted));
+        kit::menu_caption(ui, t.move_to, p);
         if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), l.folder.is_none(), false, p).clicked() {
             out = Some(("move", Some(None)));
             ui.close();
@@ -1395,7 +1357,8 @@ fn link_card(
 fn highlighted(text: &str, q: &Query, font: egui::FontId, color: Color32, p: &Pal) -> LayoutJob {
     let mut job = LayoutJob::default();
     let normal = TextFormat { font_id: font.clone(), color, ..Default::default() };
-    let hl = TextFormat { font_id: font, color: p.accent, background: p.accent_soft, ..Default::default() };
+    let hl_font = if font.family == egui::FontFamily::Proportional { theme::medium(font.size) } else { font.clone() };
+    let hl = TextFormat { font_id: hl_font, color: p.accent, ..Default::default() };
     let mut pos = 0;
     for (s, e) in q.highlights(text) {
         if s > pos {
@@ -1482,5 +1445,17 @@ impl Drop for App {
         if let Ok(mut st) = self.store.lock() {
             st.save_now();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accent_is_readable_in_both_themes() {
+        theme::set_accent(ACCENT);
+        let problems = theme::accent_problems();
+        assert!(problems.is_empty(), "{problems:?}");
     }
 }
