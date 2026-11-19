@@ -142,9 +142,9 @@ impl Pal {
             muted: hex(0x686868),
             accent: a.light,
             on_accent: a.on_light,
-            positive: hex(0x16a34a),
-            negative: hex(0xdc2626),
-            warning: hex(0xb7791f),
+            positive: hex(0x13703a),
+            negative: hex(0xc81f1f),
+            warning: hex(0x8f5b0a),
         }
     }
 
@@ -166,7 +166,7 @@ impl Pal {
             accent: a.dark,
             on_accent: a.on_dark,
             positive: hex(0x4cc38a),
-            negative: hex(0xe5484d),
+            negative: hex(0xf56a6e),
             warning: hex(0xf0b13a),
         }
     }
@@ -838,6 +838,10 @@ mod tests {
         for p in [Pal::dark(), Pal::light()] {
             for (sn, s) in [("sidebar", p.sidebar), ("bg", p.bg), ("card", p.card), ("raised", p.raised), ("raised_hi", p.raised_hi)] {
                 for (tn, t) in [("text", p.text), ("text2", p.text2), ("muted", p.muted)] {
+                    let c = contrast(t, s);
+                    assert!(c >= 4.5, "dark={} {tn} on {sn} is {c:.2}", p.dark);
+                }
+                for (tn, t) in [("negative", p.negative), ("positive", p.positive), ("warning", p.warning)] {
                     let c = contrast(t, s);
                     assert!(c >= 4.5, "dark={} {tn} on {sn} is {c:.2}", p.dark);
                 }
