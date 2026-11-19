@@ -131,10 +131,9 @@ pub fn icon_close(p: &Painter, c: Pos2, col: Color32) {
 
 // ───────────────────────── colours ─────────────────────────
 
-/// Destructive actions and errors. The shared negative role is a shade short of 4.5:1 on the dark card and the
-/// light sidebar, so text and fills use these two values instead.
+/// Destructive actions and errors: the shared negative role (4.5:1 or better on every surface).
 pub fn danger(p: &Pal) -> Color32 {
-    if p.dark { hex(0xef5f63) } else { hex(0xcc2222) }
+    p.negative
 }
 
 /// Text on a filled negative button: dark on the lighter dark-theme red, white on the light-theme red.
