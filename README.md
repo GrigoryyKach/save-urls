@@ -113,6 +113,8 @@ src/kit.rs      components on top of theme.rs: icons, navigation rows, menus, in
 src/theme.rs    shared: light/dark palette, theme mode, widgets
 src/i18n.rs     shared: language, string tables, plurals, language/theme rows
 src/nimvoro.rs  shared: update check and hand-off to the launcher
+src/selfupdate.rs  shared: self-update without the launcher (download, SHA-256, swap, restart)
+src/update_ui.rs  shared: self-update progress bar
 src/win.rs      Windows: tray icon in its own thread, clipboard, hotkey, notifications, autostart, WinHTTP
 src/linux.rs    Linux: same interface as win.rs (tray-icon on a GTK thread, arboard, global-hotkey, notify-rust, curl, a unix socket for the single instance)
 src/store.rs    data model and library.json
@@ -141,6 +143,8 @@ At start-up the program checks the latest [release](https://github.com/GrigoryyK
 If a new version exists, the "Update" button hands the update to the launcher, and without the launcher it opens the release page.
 
 The release is built by GitHub Actions when a tag is pushed: bump the version in `Cargo.toml`, then `git tag v{version} && git push --tags`.
+
+Without the launcher, the **Update** button updates the app by itself: it downloads the release archive from GitHub, checks its SHA-256 against the digest GitHub publishes for the asset, swaps the files (the old ones become `*.old`, are removed on the next start, and any failure rolls back) and restarts. If the app folder is not writable, the release page opens instead. Settings and the launcher language marker are never replaced.
 
 ## Support
 

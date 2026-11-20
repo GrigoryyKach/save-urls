@@ -227,9 +227,10 @@ impl Store {
         }
     }
 
-    pub fn save_now(&mut self) {
+    /// Writes the library now. `false` if it could not be written.
+    pub fn save_now(&mut self) -> bool {
         self.dirty_at = None;
-        let Some(p) = self.path.clone() else { return };
+        let Some(p) = self.path.clone() else { return true };
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -238,11 +239,9 @@ impl Store {
             let _ = std::fs::copy(&p, p.with_file_name("library.bak.json"));
             self.backed_up = true;
         }
-        let Ok(json) = serde_json::to_string_pretty(&self.lib) else { return };
+        let Ok(json) = serde_json::to_string_pretty(&self.lib) else { return false };
         let tmp = p.with_extension("json.tmp");
-        if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, &p);
-        }
+        std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &p).is_ok()
     }
 
     // ───────────────────────── links ─────────────────────────

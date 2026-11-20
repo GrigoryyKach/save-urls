@@ -18,6 +18,7 @@ use crate::search::Query;
 use crate::store::{Added, ClickAction, FolderId, Link, LinkId, Shared, Sort, Store};
 use crate::strings;
 use crate::support;
+use crate::update_ui;
 use crate::theme::{self, Btn, Pal, Seg};
 use crate::urlx;
 use crate::win::{self, Event, Hub};
@@ -771,20 +772,24 @@ impl App {
                     st.lib.settings.check_updates = cu;
                     changed = true;
                 }
-                ui.horizontal(|ui| {
-                    theme::hint(ui, &self.updater.status_text(strings::lang()), p);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if let UpdateState::Available { .. } = self.updater.state() {
-                            if theme::button(ui, nt.update_btn, Btn::Secondary, p).clicked() && self.updater.apply() {
-                                st.save_now();
-                                win::post_tray(win::WM_APP_QUIT);
+                if !update_ui::progress(ui, &self.updater, strings::lang(), p) {
+                    ui.horizontal(|ui| {
+                        theme::hint(ui, &self.updater.status_text(strings::lang()), p);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if let UpdateState::Available { .. } = self.updater.state() {
+                                if theme::button(ui, nt.update_btn, Btn::Secondary, p).clicked() {
+                                    let saved = st.save_now();
+                                    if self.updater.apply_if(saved) {
+                                        win::post_tray(win::WM_APP_QUIT);
+                                    }
+                                }
+                            } else if !self.updater.is_checking() && theme::button(ui, nt.check_now, Btn::Link, p).clicked() {
+                                let c = ui.ctx().clone();
+                                self.updater.check(move || c.request_repaint());
                             }
-                        } else if !self.updater.is_checking() && theme::button(ui, nt.check_now, Btn::Link, p).clicked() {
-                            let c = ui.ctx().clone();
-                            self.updater.check(move || c.request_repaint());
-                        }
+                        });
                     });
-                });
+                }
                 theme::divider(ui, p);
                 theme::section(ui, support::title(strings::lang()), p);
                 support::support_body(ui, strings::lang());
@@ -1375,6 +1380,16 @@ fn highlighted(text: &str, q: &Query, font: egui::FontId, color: Color32, p: &Pa
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.updater.is_busy() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        // A self-update has started the new version: save and quit by the tray's normal path.
+        if self.updater.should_exit() {
+            if let Ok(mut st) = self.store.lock() {
+                st.save_now();
+            }
+            win::post_tray(win::WM_APP_QUIT);
+        }
         self.frames += 1;
         if self.background_start && self.frames <= 2 {
             ctx.send_viewport_cmd(ViewportCommand::Visible(false));

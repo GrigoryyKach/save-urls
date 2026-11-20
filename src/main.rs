@@ -5,6 +5,8 @@ mod i18n;
 mod kit;
 #[allow(dead_code)]
 mod nimvoro;
+#[allow(dead_code)]
+mod selfupdate;
 mod search;
 mod store;
 mod strings;
@@ -12,6 +14,8 @@ mod support;
 // Shared with the other NIMVORO tools: some components are unused here.
 #[allow(dead_code)]
 mod theme;
+#[allow(dead_code)]
+mod update_ui;
 mod urlx;
 #[cfg(windows)]
 mod win;
@@ -22,6 +26,7 @@ mod win;
 use eframe::egui;
 
 fn main() -> eframe::Result<()> {
+    selfupdate::startup("save-urls");
     // `--save-clipboard` (Linux): save the link from the clipboard, for a system shortcut on Wayland.
     #[cfg(not(windows))]
     if win::handle_cli() {
