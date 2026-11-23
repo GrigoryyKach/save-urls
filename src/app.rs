@@ -15,7 +15,7 @@ use crate::i18n;
 use crate::kit::{self, IconFn};
 use crate::nimvoro::{self, UpdateState, Updater};
 use crate::search::Query;
-use crate::store::{Added, ClickAction, FolderId, Link, LinkId, Shared, Sort, Store};
+use crate::store::{self, Added, ClickAction, FolderId, Link, LinkId, Shared, Sort, Store};
 use crate::strings;
 use crate::support;
 use crate::update_ui;
@@ -95,6 +95,8 @@ pub struct App {
     editor: Option<Editor>,
     confirm_delete_folder: Option<FolderId>,
     rename: Option<Rename>,
+    /// A folder row is being dragged to a new place in the list.
+    folder_drag: Option<FolderId>,
     toast: Option<Toast>,
     after: Option<After>,
     cache: Option<ListCache>,
@@ -183,6 +185,7 @@ impl App {
             editor: None,
             confirm_delete_folder: None,
             rename: None,
+            folder_drag: None,
             toast: None,
             after: None,
             cache: None,
@@ -326,6 +329,63 @@ impl App {
 
     // ───────────────────────── sidebar ─────────────────────────
 
+    /// Drag-reorder of the folder rows: insertion line, edge auto-scroll, drop on release, cancel on Escape / outside the list.
+    fn folder_drag_step(&mut self, ui: &mut Ui, st: &mut Store, rows: &[Rect], p: &Pal) {
+        let Some(src) = self.folder_drag else { return };
+        let Some(from) = st.lib.folders.iter().position(|f| f.id == src) else {
+            self.folder_drag = None;
+            return;
+        };
+        let view = ui.clip_rect();
+        let (esc, released) = ui.input(|i| (i.key_pressed(Key::Escape), i.pointer.any_released()));
+        let Some(q) = ui.ctx().pointer_latest_pos().filter(|_| !esc) else {
+            self.folder_drag = None;
+            return;
+        };
+        let inside = view.contains(q);
+        let centers: Vec<f32> = rows.iter().map(|r| r.center().y).collect();
+        let slot = store::slot_at(&centers, q.y);
+        let target = store::drop_target(from, slot, st.lib.folders.len());
+        if released {
+            if inside && target.is_some() {
+                st.move_folder_to_slot(from, slot);
+            }
+            self.folder_drag = None;
+            return;
+        }
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+        ui.ctx().request_repaint();
+        if !inside {
+            return;
+        }
+        // Auto-scroll near the top / bottom edge of the visible list.
+        const EDGE: f32 = 32.0;
+        let dy = if q.y < view.top() + EDGE {
+            (view.top() + EDGE - q.y) / EDGE
+        } else if q.y > view.bottom() - EDGE {
+            -(q.y - (view.bottom() - EDGE)) / EDGE
+        } else {
+            0.0
+        };
+        if dy != 0.0 {
+            ui.scroll_with_delta(vec2(0.0, dy.clamp(-1.0, 1.0) * 12.0));
+        }
+        if target.is_some() && !rows.is_empty() {
+            let y = if slot == 0 {
+                rows[0].top() - 1.0
+            } else if slot >= rows.len() {
+                rows[rows.len() - 1].bottom() + 1.0
+            } else {
+                (rows[slot - 1].bottom() + rows[slot].top()) / 2.0
+            };
+            let x0 = rows[0].left() + 4.0;
+            let x1 = rows[0].right() - 4.0;
+            let painter = ui.painter();
+            painter.rect_filled(Rect::from_min_max(pos2(x0, y - 1.5), pos2(x1, y + 1.5)), 1.5, p.accent);
+            painter.circle_filled(pos2(x0, y), 4.0, p.accent);
+        }
+    }
+
     fn sidebar(&mut self, ui: &mut Ui, st: &mut Store, p: &Pal) {
         let t = strings::s();
         ui.horizontal(|ui| {
@@ -344,7 +404,7 @@ impl App {
         theme::section(ui, t.library, p);
         ui.add_space(6.0);
         let total = st.lib.links.len();
-        if kit::nav_row(ui, Id::unique("nav-all"), kit::NavRow { icon: kit::icon_link, label: t.all_links, count: Some(total), active: self.page == Page::All, drop_hover: false }, p).clicked() {
+        if kit::nav_row(ui, Id::unique("nav-all"), kit::NavRow { icon: kit::icon_link, label: t.all_links, count: Some(total), active: self.page == Page::All, drop_hover: false, dim: false }, p).clicked() {
             self.page = Page::All;
         }
         let unsorted = st.count_in(None);
@@ -353,7 +413,7 @@ impl App {
             kit::nav_row(
                 ui,
                 Id::unique("nav-unsorted"),
-                kit::NavRow { icon: kit::icon_inbox, label: t.no_folder, count: Some(unsorted), active: self.page == Page::Unsorted, drop_hover: hover },
+                kit::NavRow { icon: kit::icon_inbox, label: t.no_folder, count: Some(unsorted), active: self.page == Page::Unsorted, drop_hover: hover, dim: false },
                 p,
             )
         });
@@ -389,6 +449,7 @@ impl App {
                 theme::hint(ui, t.folders_empty_hint, p);
             }
             let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
+            let mut rows: Vec<Rect> = Vec::with_capacity(folders.len());
             for (idx, (fid, name)) in folders.into_iter().enumerate() {
                 if let Some(rn) = self.rename.as_mut().filter(|r| r.id == fid) {
                     let id = Id::unique(("rename", fid));
@@ -403,6 +464,7 @@ impl App {
                         }
                         rn.focus_pending = false;
                     }
+                    rows.push(resp.rect);
                     let cancel = ui.input(|i| i.key_pressed(Key::Escape));
                     if cancel {
                         self.rename = None;
@@ -419,9 +481,13 @@ impl App {
                 let resp = kit::nav_row(
                     ui,
                     Id::unique(("nav-folder", fid)),
-                    kit::NavRow { icon: kit::icon_folder, label: &name, count: Some(count), active: self.page == Page::Folder(fid), drop_hover: hover },
+                    kit::NavRow { icon: kit::icon_folder, label: &name, count: Some(count), active: self.page == Page::Folder(fid), drop_hover: hover, dim: self.folder_drag == Some(fid) },
                     p,
                 );
+                rows.push(resp.rect);
+                if resp.drag_started() && self.folder_drag.is_none() && !dragging {
+                    self.folder_drag = Some(fid);
+                }
                 if resp.clicked() {
                     self.page = Page::Folder(fid);
                 }
@@ -459,6 +525,7 @@ impl App {
                     }
                 });
             }
+            self.folder_drag_step(ui, st, &rows, p);
         });
 
         // Bottom of the panel.
@@ -472,7 +539,7 @@ impl App {
             }
         }
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
-        if kit::nav_row(&mut child, Id::unique("nav-settings"), kit::NavRow { icon: kit::icon_gear, label: t.settings, count: None, active: self.page == Page::Settings, drop_hover: false }, p).clicked() {
+        if kit::nav_row(&mut child, Id::unique("nav-settings"), kit::NavRow { icon: kit::icon_gear, label: t.settings, count: None, active: self.page == Page::Settings, drop_hover: false, dim: false }, p).clicked() {
             self.page = Page::Settings;
         }
     }
@@ -1221,6 +1288,19 @@ impl App {
             let r = Rect::from_min_size(pos + vec2(12.0, 8.0), g.size() + vec2(24.0, 16.0));
             painter.add(theme::shadow_for(p).as_shape(r, 8.0));
             painter.rect(r, theme::R_CONTROL as f32, p.raised_hi, Stroke::new(1.0, p.line_hi), StrokeKind::Inside);
+            painter.galley(r.min + vec2(12.0, 8.0), g, p.text);
+        }
+
+        // Ghost of the dragged folder.
+        if let Some(fid) = self.folder_drag
+            && let Some(pos) = ctx.pointer_latest_pos()
+            && let Some(f) = st.folder(fid)
+        {
+            let painter = ctx.layer_painter(egui::LayerId::new(Order::Tooltip, Id::unique("folder-ghost")));
+            let g = painter.layout_no_wrap(win::ellipsize(&f.name, 28), theme::medium(13.0), p.text);
+            let r = Rect::from_min_size(pos + vec2(12.0, 8.0), g.size() + vec2(24.0, 16.0));
+            painter.add(theme::shadow_for(p).as_shape(r, 8.0));
+            painter.rect(r, theme::R_CONTROL as f32, p.raised_hi, Stroke::new(1.0, p.accent), StrokeKind::Inside);
             painter.galley(r.min + vec2(12.0, 8.0), g, p.text);
         }
 

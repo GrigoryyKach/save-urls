@@ -75,7 +75,8 @@ The link is found in any copied text: "look: https://...", `www.site.com`, or ju
 
 - **Folders** with your own names: "+" in the sidebar, double-click to rename, right-click to rename,
   reorder, make a folder the default or delete it (links are not deleted, they move to "No folder").
-- **Drag and drop**: drag a link card onto a folder.
+- **Drag and drop**: drag a link card onto a folder. Drag a folder row up or down to reorder the folders: an accent line shows where it will land,
+  Esc or releasing outside the list cancels, and long lists scroll near the edges. The context-menu "Move up / Move down" items stay.
 - **Link**: a title, an optional description and a folder. Clicking the card opens the link in the browser;
   on hover there are "open", "copy", "edit" and "delete" buttons, and the right-click menu offers the same plus "Move to...".
   Deleting can be undone with the "Undo" button.

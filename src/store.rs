@@ -375,9 +375,32 @@ impl Store {
         }
     }
 
+    /// Drag-and-drop reorder: moves the folder at `from` into insertion slot `slot` (slot k = the gap before row k, `len` = after the last row).
+    /// Goes through [`Store::move_folder`], the same path as the context menu.
+    pub fn move_folder_to_slot(&mut self, from: usize, slot: usize) {
+        if let Some(to) = drop_target(from, slot, self.lib.folders.len()) {
+            self.move_folder(from, to);
+        }
+    }
+
     pub fn count_in(&self, folder: Option<FolderId>) -> usize {
         self.lib.links.iter().filter(|l| l.folder == folder).count()
     }
+}
+
+/// The insertion slot (0..=centers.len()) for a pointer at height `y`, given the vertical centres of the rows in order.
+pub fn slot_at(centers: &[f32], y: f32) -> usize {
+    centers.iter().filter(|c| **c < y).count()
+}
+
+/// Index a folder ends up at when dragged from `from` into insertion `slot`, or `None` when nothing changes.
+/// Folders are a flat list, so there is no "inside a folder" drop and no self/descendant case beyond the no-op above.
+pub fn drop_target(from: usize, slot: usize, len: usize) -> Option<usize> {
+    if from >= len || slot > len {
+        return None;
+    }
+    let to = if slot > from { slot - 1 } else { slot };
+    (to != from).then_some(to)
 }
 
 /// "New folder", "New folder 2", ...
@@ -417,6 +440,50 @@ mod tests {
         s.delete_folder(a);
         assert_eq!(s.link(l).unwrap().folder, None);
         assert_eq!(s.lib.settings.default_folder, None);
+    }
+
+    #[test]
+    fn folder_drop_slots() {
+        // Slots around the source row change nothing.
+        assert_eq!(drop_target(1, 1, 4), None);
+        assert_eq!(drop_target(1, 2, 4), None);
+        assert_eq!(drop_target(0, 0, 4), None);
+        assert_eq!(drop_target(3, 4, 4), None);
+        // Moves up, down, to the ends.
+        assert_eq!(drop_target(3, 0, 4), Some(0));
+        assert_eq!(drop_target(0, 4, 4), Some(3));
+        assert_eq!(drop_target(0, 2, 4), Some(1));
+        assert_eq!(drop_target(2, 1, 4), Some(1));
+        // Out of range and empty list.
+        assert_eq!(drop_target(4, 0, 4), None);
+        assert_eq!(drop_target(0, 5, 4), None);
+        assert_eq!(drop_target(0, 0, 0), None);
+        // Slot from pointer height.
+        let c = [10.0, 30.0, 50.0];
+        assert_eq!(slot_at(&c, -5.0), 0);
+        assert_eq!(slot_at(&c, 20.0), 1);
+        assert_eq!(slot_at(&c, 100.0), 3);
+        assert_eq!(slot_at(&[], 5.0), 0);
+    }
+
+    #[test]
+    fn folder_reorder_by_slot() {
+        let mut s = temp_store();
+        let ids: Vec<FolderId> = ["A", "B", "C", "D"].iter().map(|n| s.add_folder(n)).collect();
+        let order = |s: &Store| s.lib.folders.iter().map(|f| f.name.clone()).collect::<Vec<_>>().join("");
+        s.move_folder_to_slot(0, 3);
+        assert_eq!(order(&s), "BCAD");
+        s.move_folder_to_slot(3, 0);
+        assert_eq!(order(&s), "DBCA");
+        let rev = s.rev;
+        s.move_folder_to_slot(1, 2); // no-op
+        assert_eq!(order(&s), "DBCA");
+        assert_eq!(s.rev, rev);
+        s.move_folder_to_slot(9, 0);
+        s.move_folder_to_slot(0, 99);
+        assert_eq!(order(&s), "DBCA");
+        // Ids stay attached to their names.
+        assert_eq!(s.folder(ids[0]).unwrap().name, "A");
     }
 
     #[test]

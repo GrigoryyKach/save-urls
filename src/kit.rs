@@ -180,15 +180,21 @@ pub struct NavRow<'a> {
     pub active: bool,
     /// Highlight while a link is dragged over the folder.
     pub drop_hover: bool,
+    /// The row is being dragged: draw it faded.
+    pub dim: bool,
 }
 
 pub const NAV_H: f32 = 36.0;
 
 pub fn nav_row(ui: &mut Ui, id: Id, row: NavRow, p: &Pal) -> Response {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), NAV_H), Sense::hover());
-    let resp = ui.interact(rect, id, Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+    let resp = ui.interact(rect, id, Sense::click_and_drag()).on_hover_cursor(CursorIcon::PointingHand);
     let t = theme::fade(ui, id.with("hover"), resp.hovered() && !row.active);
-    let painter = ui.painter();
+    let mut painter = ui.painter().clone();
+    if row.dim {
+        painter.multiply_opacity(0.4);
+    }
+    let painter = &painter;
     if row.drop_hover {
         painter.rect(rect, 8.0, p.raised_hi, Stroke::new(2.0, p.accent), StrokeKind::Inside);
     } else if row.active {

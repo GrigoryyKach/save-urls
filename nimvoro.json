@@ -15,7 +15,7 @@
     },
     {
       "title": "Folders and drag and drop",
-      "text": "Your own folders, their order and a default folder; cards can be dragged onto folders."
+      "text": "Your own folders, drag them by the mouse to reorder, set a default folder; cards can be dragged onto folders."
     },
     {
       "title": "Smart search",
@@ -68,7 +68,7 @@
         },
         {
           "title": "Папки и перетаскивание",
-          "text": "Свои папки, порядок, папка по умолчанию; карточки перетаскиваются мышью."
+          "text": "Свои папки, порядок (папки перетаскиваются мышью), папка по умолчанию; карточки перетаскиваются мышью."
         },
         {
           "title": "Умный поиск",
@@ -101,7 +101,7 @@
         },
         {
           "title": "Теки та перетягування",
-          "text": "Власні теки, їхній порядок, тека за замовчуванням; картки перетягуються мишею."
+          "text": "Власні теки, їхній порядок (теки перетягуються мишею), тека за замовчуванням; картки перетягуються мишею."
         },
         {
           "title": "Розумний пошук",
