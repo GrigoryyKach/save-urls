@@ -14,8 +14,8 @@
       "text": "The app fetches the <title> or og:title of the saved page on its own."
     },
     {
-      "title": "Folders and drag and drop",
-      "text": "Your own folders, drag them by the mouse to reorder, set a default folder; cards can be dragged onto folders."
+      "title": "Nested folders and drag and drop",
+      "text": "Your own folders, up to 5 levels deep; drag them to reorder or to move them in and out of other folders, set a default folder; cards can be dragged onto folders."
     },
     {
       "title": "Smart search",
@@ -67,8 +67,8 @@
           "text": "Программа сама подтягивает <title> или og:title сохранённой страницы."
         },
         {
-          "title": "Папки и перетаскивание",
-          "text": "Свои папки, порядок (папки перетаскиваются мышью), папка по умолчанию; карточки перетаскиваются мышью."
+          "title": "Вложенные папки и перетаскивание",
+          "text": "Свои папки до 5 уровней вложенности; их можно перетаскивать мышью, меняя порядок или перенося в другие папки и обратно; папка по умолчанию; карточки перетаскиваются мышью."
         },
         {
           "title": "Умный поиск",
@@ -100,8 +100,8 @@
           "text": "Програма сама підтягує <title> або og:title збереженої сторінки."
         },
         {
-          "title": "Теки та перетягування",
-          "text": "Власні теки, їхній порядок (теки перетягуються мишею), тека за замовчуванням; картки перетягуються мишею."
+          "title": "Вкладені теки та перетягування",
+          "text": "Власні теки до 5 рівнів вкладеності; їх можна перетягувати мишею, змінюючи порядок або переносячи в інші теки й назад; тека за замовчуванням; картки перетягуються мишею."
         },
         {
           "title": "Розумний пошук",

@@ -15,7 +15,7 @@ use crate::i18n;
 use crate::kit::{self, IconFn};
 use crate::nimvoro::{self, UpdateState, Updater};
 use crate::search::Query;
-use crate::store::{self, Added, ClickAction, FolderId, Link, LinkId, Shared, Sort, Store};
+use crate::store::{self, Added, ClickAction, DropAt, FolderId, Link, LinkId, Shared, Sort, Store};
 use crate::strings;
 use crate::support;
 use crate::update_ui;
@@ -97,6 +97,10 @@ pub struct App {
     rename: Option<Rename>,
     /// A folder row is being dragged to a new place in the list.
     folder_drag: Option<FolderId>,
+    /// While dragging: the collapsed folder under the pointer and since when (it opens after a short hover).
+    drag_hover: Option<(FolderId, f64)>,
+    /// The "Move to..." dialog is open for this folder.
+    move_to: Option<FolderId>,
     toast: Option<Toast>,
     after: Option<After>,
     cache: Option<ListCache>,
@@ -138,24 +142,33 @@ fn bookmarks_html(st: &Store) -> String {
         "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n\
          <TITLE>Bookmarks</TITLE>\n<H1>Save URLs</H1>\n<DL><p>\n",
     );
-    let link = |out: &mut String, l: &Link, indent: &str| {
-        out.push_str(&format!("{indent}<DT><A HREF=\"{}\" ADD_DATE=\"{}\">{}</A>\n", esc_html(&l.url), l.added, esc_html(&l.title)));
-        if !l.description.trim().is_empty() {
-            out.push_str(&format!("{indent}<DD>{}\n", esc_html(l.description.trim())));
-        }
-    };
-    for f in &st.lib.folders {
-        out.push_str(&format!("    <DT><H3>{}</H3>\n    <DL><p>\n", esc_html(&f.name)));
-        for l in st.lib.links.iter().filter(|l| l.folder == Some(f.id)) {
-            link(&mut out, l, "        ");
-        }
-        out.push_str("    </DL><p>\n");
-    }
+    bookmarks_level(&mut out, st, None, 1);
     for l in st.lib.links.iter().filter(|l| l.folder.is_none()) {
-        link(&mut out, l, "    ");
+        bookmarks_link(&mut out, l, "    ");
     }
     out.push_str("</DL><p>\n");
     out
+}
+
+fn bookmarks_link(out: &mut String, l: &Link, indent: &str) {
+    out.push_str(&format!("{indent}<DT><A HREF=\"{}\" ADD_DATE=\"{}\">{}</A>\n", esc_html(&l.url), l.added, esc_html(&l.title)));
+    if !l.description.trim().is_empty() {
+        out.push_str(&format!("{indent}<DD>{}\n", esc_html(l.description.trim())));
+    }
+}
+
+/// The folders under `parent` as nested `<DL>` lists, each with its own links.
+fn bookmarks_level(out: &mut String, st: &Store, parent: Option<FolderId>, level: usize) {
+    let pad = "    ".repeat(level);
+    for id in st.children(parent) {
+        let Some(f) = st.folder(id) else { continue };
+        out.push_str(&format!("{pad}<DT><H3>{}</H3>\n{pad}<DL><p>\n", esc_html(&f.name)));
+        bookmarks_level(out, st, Some(id), level + 1);
+        for l in st.lib.links.iter().filter(|l| l.folder == Some(id)) {
+            bookmarks_link(out, l, &"    ".repeat(level + 1));
+        }
+        out.push_str(&format!("{pad}</DL><p>\n"));
+    }
 }
 
 impl App {
@@ -186,6 +199,8 @@ impl App {
             confirm_delete_folder: None,
             rename: None,
             folder_drag: None,
+            drag_hover: None,
+            move_to: None,
             toast: None,
             after: None,
             cache: None,
@@ -302,12 +317,21 @@ impl App {
             return c.ids.clone();
         }
         let filter = self.page.folder_filter();
+        let scope: Option<Vec<FolderId>> = match self.page {
+            Page::Folder(f) => Some(st.subtree(f)),
+            _ => None,
+        };
         let q = Query::new(&self.query);
         let mut items: Vec<(&Link, i32)> = st
             .lib
             .links
             .iter()
-            .filter(|l| filter.is_none_or(|f| l.folder == f))
+            .filter(|l| match (&scope, filter) {
+                // A folder shows its own links and those of the folders inside it.
+                (Some(ids), _) => l.folder.is_some_and(|f| ids.contains(&f)),
+                (None, Some(f)) => l.folder == f,
+                (None, None) => true,
+            })
             .filter_map(|l| {
                 if q.is_empty() { Some((l, 0)) } else { q.score(&l.title, &l.description, &urlx::pretty(&l.url)).map(|s| (l, s)) }
             })
@@ -329,33 +353,53 @@ impl App {
 
     // ───────────────────────── sidebar ─────────────────────────
 
-    /// Drag-reorder of the folder rows: insertion line, edge auto-scroll, drop on release, cancel on Escape / outside the list.
-    fn folder_drag_step(&mut self, ui: &mut Ui, st: &mut Store, rows: &[Rect], p: &Pal) {
+    /// Which drop a pointer at height `y` means, from the visible rows (`tree`: folder and level, `rows`: their rectangles).
+    fn drop_at(tree: &[(FolderId, usize)], rows: &[Rect], y: f32) -> Option<DropAt> {
+        let first = rows.first()?;
+        if y < first.top() {
+            return Some(DropAt::Before(tree[0].0));
+        }
+        for (i, r) in rows.iter().enumerate() {
+            if y <= r.bottom() + 1.0 {
+                let next = tree.get(i + 1).map(|t| t.0);
+                return Some(store::drop_zone(tree[i].0, next, r.top(), r.bottom(), y));
+            }
+        }
+        Some(DropAt::End)
+    }
+
+    /// Drag of the folder rows: an insertion line at the level the folder will land on, or a highlighted row to drop into it;
+    /// a collapsed folder opens after a short hover; edge auto-scroll; drop on release, cancel on Escape / outside the list.
+    fn folder_drag_step(&mut self, ui: &mut Ui, st: &mut Store, tree: &[(FolderId, usize)], rows: &[Rect], p: &Pal) {
         let Some(src) = self.folder_drag else { return };
-        let Some(from) = st.lib.folders.iter().position(|f| f.id == src) else {
+        if st.folder(src).is_none() {
             self.folder_drag = None;
+            self.drag_hover = None;
             return;
-        };
+        }
         let view = ui.clip_rect();
         let (esc, released) = ui.input(|i| (i.key_pressed(Key::Escape), i.pointer.any_released()));
         let Some(q) = ui.ctx().pointer_latest_pos().filter(|_| !esc) else {
             self.folder_drag = None;
+            self.drag_hover = None;
             return;
         };
         let inside = view.contains(q);
-        let centers: Vec<f32> = rows.iter().map(|r| r.center().y).collect();
-        let slot = store::slot_at(&centers, q.y);
-        let target = store::drop_target(from, slot, st.lib.folders.len());
+        let at = Self::drop_at(tree, rows, q.y);
+        // Only drops that are allowed and change something get an indicator and work on release.
+        let ok = at.filter(|a| st.drop_plan(src, *a).is_some());
         if released {
-            if inside && target.is_some() {
-                st.move_folder_to_slot(from, slot);
+            if inside && let Some(a) = ok {
+                st.drop_folder(src, a);
             }
             self.folder_drag = None;
+            self.drag_hover = None;
             return;
         }
         ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         ui.ctx().request_repaint();
         if !inside {
+            self.drag_hover = None;
             return;
         }
         // Auto-scroll near the top / bottom edge of the visible list.
@@ -370,20 +414,49 @@ impl App {
         if dy != 0.0 {
             ui.scroll_with_delta(vec2(0.0, dy.clamp(-1.0, 1.0) * 12.0));
         }
-        if target.is_some() && !rows.is_empty() {
-            let y = if slot == 0 {
-                rows[0].top() - 1.0
-            } else if slot >= rows.len() {
-                rows[rows.len() - 1].bottom() + 1.0
-            } else {
-                (rows[slot - 1].bottom() + rows[slot].top()) / 2.0
-            };
-            let x0 = rows[0].left() + 4.0;
-            let x1 = rows[0].right() - 4.0;
-            let painter = ui.painter();
-            painter.rect_filled(Rect::from_min_max(pos2(x0, y - 1.5), pos2(x1, y + 1.5)), 1.5, p.accent);
-            painter.circle_filled(pos2(x0, y), 4.0, p.accent);
+        // Hovering a collapsed folder opens it, so its subfolders can be reached.
+        let now = ui.input(|i| i.time);
+        match at {
+            Some(DropAt::Inside(t)) if t != src && st.has_children(t) && !st.folder(t).is_some_and(|f| f.expanded) => match self.drag_hover {
+                Some((h, since)) if h == t => {
+                    if now - since >= 0.6 {
+                        st.set_expanded(t, true);
+                        self.drag_hover = None;
+                    }
+                }
+                _ => self.drag_hover = Some((t, now)),
+            },
+            _ => self.drag_hover = None,
         }
+        let Some(a) = ok else { return };
+        let painter = ui.painter();
+        let find = |id: FolderId| tree.iter().position(|t| t.0 == id);
+        match a {
+            DropAt::Inside(t) => {
+                if let Some(i) = find(t) {
+                    painter.rect(rows[i], 8.0, theme::alpha(p.accent, 40), Stroke::new(2.0, p.accent), StrokeKind::Inside);
+                }
+            }
+            DropAt::Before(t) => {
+                if let Some(i) = find(t) {
+                    let y = if i == 0 { rows[0].top() - 1.0 } else { (rows[i - 1].bottom() + rows[i].top()) / 2.0 };
+                    Self::insertion_line(painter, rows[i], tree[i].1, y, p);
+                }
+            }
+            DropAt::End => {
+                if let Some(last) = rows.last() {
+                    Self::insertion_line(painter, *last, 1, last.bottom() + 1.0, p);
+                }
+            }
+        }
+    }
+
+    /// The accent line of a folder drop: starts at the indent of the level the folder lands on.
+    fn insertion_line(painter: &egui::Painter, row: Rect, level: usize, y: f32, p: &Pal) {
+        let x0 = row.left() + 6.0 + (level - 1) as f32 * kit::TREE_STEP;
+        let x1 = row.right() - 4.0;
+        painter.rect_filled(Rect::from_min_max(pos2(x0, y - 1.5), pos2(x1, y + 1.5)), 1.5, p.accent);
+        painter.circle_filled(pos2(x0, y), 4.0, p.accent);
     }
 
     fn sidebar(&mut self, ui: &mut Ui, st: &mut Store, p: &Pal) {
@@ -448,12 +521,20 @@ impl App {
                 ui.add_space(2.0);
                 theme::hint(ui, t.folders_empty_hint, p);
             }
-            let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
-            let mut rows: Vec<Rect> = Vec::with_capacity(folders.len());
-            for (idx, (fid, name)) in folders.into_iter().enumerate() {
+            let tree = st.tree(false);
+            let mut rows: Vec<Rect> = Vec::with_capacity(tree.len());
+            for (fid, level) in tree.iter().copied() {
+                let indent = (level - 1) as f32 * kit::TREE_STEP;
+                let name = st.folder(fid).map(|f| f.name.clone()).unwrap_or_default();
                 if let Some(rn) = self.rename.as_mut().filter(|r| r.id == fid) {
                     let id = Id::unique(("rename", fid));
-                    let resp = kit::text_field(ui, &mut rn.text, t.folder_name_ph, Some(kit::icon_folder), id, p);
+                    let resp = ui
+                        .horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            ui.add_space(indent);
+                            kit::text_field(ui, &mut rn.text, t.folder_name_ph, Some(kit::icon_folder), id, p)
+                        })
+                        .inner;
                     if rn.focus_pending {
                         resp.request_focus();
                         // Select everything so a new name can be typed at once.
@@ -475,47 +556,72 @@ impl App {
                     }
                     continue;
                 }
-                let count = st.count_in(Some(fid));
+                // A parent shows how many links are in it, including its subfolders.
+                let count = st.count_deep(fid);
+                let has_kids = st.has_children(fid);
+                let expanded = st.folder(fid).is_some_and(|f| f.expanded);
                 let top = ui.cursor().min;
                 let hover = dragging && ui.rect_contains_pointer(Rect::from_min_size(top, vec2(ui.available_width(), kit::NAV_H)));
-                let resp = kit::nav_row(
+                let (resp, chevron) = kit::nav_row_tree(
                     ui,
                     Id::unique(("nav-folder", fid)),
                     kit::NavRow { icon: kit::icon_folder, label: &name, count: Some(count), active: self.page == Page::Folder(fid), drop_hover: hover, dim: self.folder_drag == Some(fid) },
+                    level - 1,
+                    has_kids.then_some(expanded),
                     p,
                 );
                 rows.push(resp.rect);
-                if resp.drag_started() && self.folder_drag.is_none() && !dragging {
+                if chevron {
+                    st.set_expanded(fid, !expanded);
+                } else if resp.drag_started() && self.folder_drag.is_none() && !dragging {
                     self.folder_drag = Some(fid);
                 }
-                if resp.clicked() {
+                if resp.clicked() && !chevron {
                     self.page = Page::Folder(fid);
                 }
-                if resp.double_clicked() {
+                if resp.double_clicked() && !chevron {
                     self.rename = Some(Rename { id: fid, text: name.clone(), focus_pending: true });
                 }
                 if let Some(d) = resp.dnd_release_payload::<LinkDrag>() {
                     st.move_link(d.0, Some(fid));
                 }
                 let is_default = st.lib.settings.default_folder == Some(fid);
-                let nfolders = st.lib.folders.len();
+                let parent = st.folder(fid).and_then(|f| f.parent);
+                let sibs = st.children(parent);
+                let pos = sibs.iter().position(|c| *c == fid).unwrap_or(0);
+                let can_sub = st.can_add_child(fid);
                 resp.context_menu(|ui| {
                     ui.set_min_width(220.0);
                     if kit::menu_item(ui, t.rename, Some(kit::icon_edit), false, false, p).clicked() {
                         self.rename = Some(Rename { id: fid, text: name.clone(), focus_pending: true });
                         ui.close();
                     }
+                    if can_sub {
+                        if kit::menu_item(ui, t.new_subfolder, Some(kit::icon_plus), false, false, p).clicked() {
+                            if let Some(id) = st.add_folder_in(t.new_folder, Some(fid)) {
+                                self.rename = Some(Rename { id, text: st.folder_name(Some(id)), focus_pending: true });
+                                self.page = Page::Folder(id);
+                            }
+                            ui.close();
+                        }
+                    } else {
+                        kit::menu_item_disabled(ui, t.new_subfolder, Some(kit::icon_plus), t.max_depth_tip, p);
+                    }
                     if kit::menu_item(ui, t.save_here, Some(kit::icon_inbox), is_default, false, p).clicked() {
                         st.lib.settings.default_folder = if is_default { None } else { Some(fid) };
                         st.touch();
                         ui.close();
                     }
-                    if idx > 0 && kit::menu_item(ui, t.move_up, None, false, false, p).clicked() {
-                        st.move_folder(idx, idx - 1);
+                    if pos > 0 && kit::menu_item(ui, t.move_up, None, false, false, p).clicked() {
+                        st.move_sibling(fid, -1);
                         ui.close();
                     }
-                    if idx + 1 < nfolders && kit::menu_item(ui, t.move_down, None, false, false, p).clicked() {
-                        st.move_folder(idx, idx + 1);
+                    if pos + 1 < sibs.len() && kit::menu_item(ui, t.move_down, None, false, false, p).clicked() {
+                        st.move_sibling(fid, 1);
+                        ui.close();
+                    }
+                    if kit::menu_item(ui, &format!("{}\u{2026}", t.move_to), None, false, false, p).clicked() {
+                        self.move_to = Some(fid);
                         ui.close();
                     }
                     kit::menu_separator(ui, p);
@@ -525,7 +631,7 @@ impl App {
                     }
                 });
             }
-            self.folder_drag_step(ui, st, &rows, p);
+            self.folder_drag_step(ui, st, &tree, &rows, p);
         });
 
         // Bottom of the panel.
@@ -553,7 +659,7 @@ impl App {
         let (title, total) = match self.page {
             Page::All => (t.all_links.to_string(), st.lib.links.len()),
             Page::Unsorted => (t.no_folder.to_string(), st.count_in(None)),
-            Page::Folder(f) => (st.folder_name(Some(f)), st.count_in(Some(f))),
+            Page::Folder(f) => (st.folder_name(Some(f)), st.count_deep(f)),
             Page::Settings => unreachable!(),
         };
 
@@ -561,7 +667,12 @@ impl App {
         let head = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::hover()).0;
         ui.painter().text(head.left_top(), Align2::LEFT_TOP, &title, theme::medium(24.0), p.text);
         let sub = if self.query.trim().is_empty() {
-            if total == 0 { t.empty_now.into() } else { pl(total, &t.links) }
+            let base = if total == 0 { t.empty_now.to_string() } else { pl(total, &t.links) };
+            match self.page {
+                // Breadcrumb for a nested folder: Parent > Child.
+                Page::Folder(f) if st.depth(f) > 1 => format!("{} \u{b7} {base}", st.folder_path(f)),
+                _ => base,
+            }
         } else {
             t.found.replace("{n}", &ids.len().to_string()).replace("{total}", &total.to_string())
         };
@@ -634,14 +745,19 @@ impl App {
         }
 
         let q = Query::new(&self.query);
-        let show_folder = self.page == Page::All;
-        let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
+        let folders = st.folder_list();
         let mut action: Option<(LinkId, &'static str, Option<Option<FolderId>>)> = None;
         ScrollArea::vertical().id_salt(("links", self.page_key())).auto_shrink([false; 2]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             ui.set_width(ui.available_width() - 8.0);
             for id in &ids {
                 let Some(link) = st.link(*id) else { continue };
+                // The folder tag: in "All links", and in a folder for the links that live in one of its subfolders.
+                let show_folder = match self.page {
+                    Page::All => true,
+                    Page::Folder(f) => link.folder != Some(f),
+                    _ => false,
+                };
                 if let Some(a) = link_card(ui, link, &q, show_folder, st.folder_name(link.folder), &folders, p) {
                     action = Some((*id, a.0, a.1));
                 }
@@ -779,7 +895,7 @@ impl App {
                     let cur = st.lib.settings.default_folder;
                     let label = st.folder_name(cur);
                     let resp = kit::dropdown_button(ui, &label, Some(kit::icon_folder), 240.0, Id::unique("default-folder"), p);
-                    let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
+                    let folders = st.folder_list();
                     Popup::menu(&resp).frame(kit::menu_frame(p)).width(240.0).show(|ui| {
                         if kit::menu_item(ui, t.no_folder, Some(kit::icon_inbox), cur.is_none(), false, p).clicked() {
                             st.lib.settings.default_folder = None;
@@ -905,7 +1021,7 @@ impl App {
         let mut save = false;
         let mut delete = false;
         let mut close = false;
-        let folders: Vec<(FolderId, String)> = st.lib.folders.iter().map(|f| (f.id, f.name.clone())).collect();
+        let folders = st.folder_list();
         let folder_label = st.folder_name(ed.folder);
         let fetch_on = st.lib.settings.fetch_titles;
 
@@ -1105,7 +1221,8 @@ impl App {
             self.confirm_delete_folder = None;
             return;
         };
-        let n = st.count_in(Some(fid));
+        let n = st.count_deep(fid);
+        let subs = st.subtree(fid).len() - 1;
         let mut close = false;
         let mut confirm = false;
         let modal = egui::Modal::new(Id::unique("confirm"))
@@ -1122,8 +1239,14 @@ impl App {
                 ui.set_width(400.0);
                 ui.spacing_mut().item_spacing.y = 8.0;
                 ui.label(RichText::new(t.delete_folder_q.replace("{name}", &name)).font(theme::medium(20.0)).color(p.text));
-                let body = if n == 0 { t.folder_is_empty.to_string() } else { t.links_move_out.replace("{links}", &pl(n, &t.links)) };
-                theme::hint(ui, &body, p);
+                if subs > 0 {
+                    theme::hint(ui, &t.subfolders_deleted.replace("{subs}", &pl(subs, &t.folders_pl)), p);
+                }
+                if n > 0 {
+                    theme::hint(ui, &t.links_move_out.replace("{links}", &pl(n, &t.links)), p);
+                } else if subs == 0 {
+                    theme::hint(ui, t.folder_is_empty, p);
+                }
                 ui.add_space(16.0);
                 let h = Btn::Primary.height();
                 let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
@@ -1154,6 +1277,69 @@ impl App {
         }
         if close {
             self.confirm_delete_folder = None;
+        }
+    }
+
+    /// "Move to...": pick a new parent for a folder, or the top level.
+    fn move_modal(&mut self, ctx: &egui::Context, st: &mut Store, p: &Pal) {
+        let t = strings::s();
+        let Some(fid) = self.move_to else { return };
+        let Some((name, cur)) = st.folder(fid).map(|f| (f.name.clone(), f.parent)) else {
+            self.move_to = None;
+            return;
+        };
+        // Valid targets only: not itself, not its own subfolders, and nothing that would push the subtree below level 5.
+        let targets: Vec<(FolderId, String, usize)> = st
+            .tree(true)
+            .into_iter()
+            .filter(|(id, _)| st.can_move(fid, Some(*id)))
+            .map(|(id, level)| (id, st.folder_name(Some(id)), level - 1))
+            .collect();
+        let mut pick: Option<Option<FolderId>> = None;
+        let mut close = false;
+        let modal = egui::Modal::new(Id::unique("move-folder"))
+            .backdrop_color(Color32::from_black_alpha(130))
+            .frame(
+                Frame::new()
+                    .fill(p.card)
+                    .stroke(Stroke::new(1.0, p.line_hi))
+                    .corner_radius(theme::R_WINDOW)
+                    .inner_margin(Margin::same(24))
+                    .shadow(theme::shadow_for(p)),
+            )
+            .show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.spacing_mut().item_spacing.y = 8.0;
+                ui.label(RichText::new(t.move_folder_to.replace("{name}", &win::ellipsize(&name, 28))).font(theme::medium(20.0)).color(p.text));
+                ui.add_space(4.0);
+                ScrollArea::vertical().id_salt("move-targets").max_height(280.0).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    if kit::menu_item_indented(ui, t.top_level, Some(kit::icon_inbox), cur.is_none(), false, 0.0, p).clicked() {
+                        pick = Some(None);
+                    }
+                    for (id, label, level) in &targets {
+                        if kit::menu_item_indented(ui, label, Some(kit::icon_folder), cur == Some(*id), false, *level as f32 * kit::TREE_STEP, p).clicked() {
+                            pick = Some(Some(*id));
+                        }
+                    }
+                });
+                ui.add_space(8.0);
+                let h = Btn::Primary.height();
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
+                let cancel_r = Rect::from_min_size(pos2(row.right() - 96.0, row.top()), vec2(96.0, h));
+                if theme::button_at(ui, cancel_r, Id::unique("mv-cancel"), t.cancel, Btn::Secondary, p).clicked() {
+                    close = true;
+                }
+            });
+        if modal.should_close() {
+            close = true;
+        }
+        if let Some(target) = pick {
+            st.move_folder_to(fid, target, usize::MAX);
+            close = true;
+        }
+        if close {
+            self.move_to = None;
         }
     }
 
@@ -1214,7 +1400,7 @@ impl App {
     }
 
     fn handle_keys(&mut self, ctx: &egui::Context, st: &mut Store, now: f64) {
-        if self.editor.is_some() || self.confirm_delete_folder.is_some() {
+        if self.editor.is_some() || self.confirm_delete_folder.is_some() || self.move_to.is_some() {
             return;
         }
         let typing = ctx.memory(|m| m.focused().is_some());
@@ -1306,6 +1492,7 @@ impl App {
 
         self.editor_modal(&ctx, st, p, now);
         self.confirm_modal(&ctx, st, p);
+        self.move_modal(&ctx, st, p);
         self.toast(&ctx, st, p, now);
     }
 }

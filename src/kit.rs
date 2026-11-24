@@ -4,6 +4,7 @@
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, Frame, Id, Margin, Painter, Pos2, Rect, Response, Sense, Shape, Stroke,
     RichText, StrokeKind, TextEdit, Ui, Vec2, pos2, vec2,
+    text::{LayoutJob, TextFormat, TextWrapping},
 };
 
 use crate::theme::{self, Pal, hex, mix};
@@ -113,6 +114,11 @@ pub fn icon_chevron(p: &Painter, c: Pos2, col: Color32) {
     poly(p, c, &[(-3.5, -1.5), (0.0, 2.0), (3.5, -1.5)], false, Stroke::new(1.5, col));
 }
 
+/// Chevron pointing right: a collapsed tree node.
+pub fn icon_chevron_right(p: &Painter, c: Pos2, col: Color32) {
+    poly(p, c, &[(-1.5, -3.5), (2.0, 0.0), (-1.5, 3.5)], false, Stroke::new(1.5, col));
+}
+
 pub fn icon_check(p: &Painter, c: Pos2, col: Color32) {
     poly(p, c, &[(-4.5, 0.0), (-1.5, 3.0), (4.5, -3.5)], false, Stroke::new(1.5, col));
 }
@@ -187,6 +193,19 @@ pub struct NavRow<'a> {
 pub const NAV_H: f32 = 36.0;
 
 pub fn nav_row(ui: &mut Ui, id: Id, row: NavRow, p: &Pal) -> Response {
+    nav_row_impl(ui, id, row, None, p).0
+}
+
+/// Indent step of one folder level in the sidebar tree.
+pub const TREE_STEP: f32 = 14.0;
+
+/// A folder row of the tree: indented by `level` (0 = top), with a chevron when `chevron` is `Some(expanded)`.
+/// Without a chevron the icon and name stay where they would be next to one. Returns the row and whether the chevron was clicked.
+pub fn nav_row_tree(ui: &mut Ui, id: Id, row: NavRow, level: usize, chevron: Option<bool>, p: &Pal) -> (Response, bool) {
+    nav_row_impl(ui, id, row, Some((level as f32 * TREE_STEP, chevron)), p)
+}
+
+fn nav_row_impl(ui: &mut Ui, id: Id, row: NavRow, tree: Option<(f32, Option<bool>)>, p: &Pal) -> (Response, bool) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), NAV_H), Sense::hover());
     let resp = ui.interact(rect, id, Sense::click_and_drag()).on_hover_cursor(CursorIcon::PointingHand);
     let t = theme::fade(ui, id.with("hover"), resp.hovered() && !row.active);
@@ -204,7 +223,21 @@ pub fn nav_row(ui: &mut Ui, id: Id, row: NavRow, p: &Pal) -> Response {
         painter.rect_filled(rect, 8.0, theme::alpha(p.raised, (t * 200.0) as u8));
     }
     let col = if row.active { p.text } else { mix(p.text2, p.text, t) };
-    (row.icon)(painter, pos2(rect.left() + 20.0, rect.center().y), if row.active { p.text } else { mix(p.muted, p.text2, t) });
+    let (indent, icon_x, text_x) = match tree {
+        Some((indent, _)) => (indent, 28.0 + indent, 44.0 + indent),
+        None => (0.0, 20.0, 36.0),
+    };
+    let mut chevron_clicked = false;
+    if let Some((_, Some(open))) = tree {
+        let hit = Rect::from_min_size(pos2(rect.left() + indent, rect.top()), vec2(22.0, rect.height()));
+        let cr = ui.interact(hit, id.with("chevron"), Sense::click()).on_hover_cursor(CursorIcon::PointingHand);
+        chevron_clicked = cr.clicked();
+        let ct = theme::fade(ui, id.with("chevron-hover"), cr.hovered());
+        let c = pos2(hit.center().x, rect.center().y);
+        let colr = mix(p.muted, p.text, ct);
+        if open { icon_chevron(painter, c, colr) } else { icon_chevron_right(painter, c, colr) }
+    }
+    (row.icon)(painter, pos2(rect.left() + icon_x, rect.center().y), if row.active { p.text } else { mix(p.muted, p.text2, t) });
     let right = match row.count {
         Some(n) => {
             let g = painter.layout_no_wrap(n.to_string(), theme::mono(12.0), p.muted);
@@ -214,14 +247,24 @@ pub fn nav_row(ui: &mut Ui, id: Id, row: NavRow, p: &Pal) -> Response {
         }
         None => rect.right() - 8.0,
     };
-    let clip = Rect::from_min_max(pos2(rect.left() + 36.0, rect.top()), pos2(right, rect.bottom()));
+    let clip = Rect::from_min_max(pos2(rect.left() + text_x, rect.top()), pos2(right, rect.bottom()));
     let font = if row.active { theme::medium(14.0) } else { theme::reg(14.0) };
-    painter.with_clip_rect(clip).text(pos2(clip.left(), rect.center().y), Align2::LEFT_CENTER, row.label, font, col);
-    resp
+    // One line, cut with an ellipsis.
+    let mut job = LayoutJob::default();
+    job.append(row.label, 0.0, TextFormat { font_id: font, color: col, ..Default::default() });
+    job.wrap = TextWrapping { max_width: clip.width().max(1.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+    let g = painter.layout_job(job);
+    painter.galley(pos2(clip.left(), rect.center().y - g.size().y / 2.0), g, col);
+    (resp, chevron_clicked)
 }
 
 /// Dropdown / context menu item.
 pub fn menu_item(ui: &mut Ui, label: &str, icon: Option<IconFn>, checked: bool, is_danger: bool, p: &Pal) -> Response {
+    menu_item_indented(ui, label, icon, checked, is_danger, 0.0, p)
+}
+
+/// [`menu_item`] shifted right by `indent`, for the levels of a folder tree.
+pub fn menu_item_indented(ui: &mut Ui, label: &str, icon: Option<IconFn>, checked: bool, is_danger: bool, indent: f32, p: &Pal) -> Response {
     let w = ui.available_width().max(200.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
     let resp = resp.on_hover_cursor(CursorIcon::PointingHand);
@@ -231,7 +274,7 @@ pub fn menu_item(ui: &mut Ui, label: &str, icon: Option<IconFn>, checked: bool, 
         painter.rect_filled(rect, 8.0, theme::alpha(p.raised, (t * 255.0) as u8));
     }
     let col = if is_danger { danger(p) } else { p.text };
-    let mut x = rect.left() + 8.0;
+    let mut x = rect.left() + 8.0 + indent;
     if let Some(icon) = icon {
         icon(painter, pos2(x + 8.0, rect.center().y), if is_danger { danger(p) } else { p.text2 });
         x += 24.0;
@@ -242,6 +285,22 @@ pub fn menu_item(ui: &mut Ui, label: &str, icon: Option<IconFn>, checked: bool, 
         icon_check(painter, pos2(rect.right() - 16.0, rect.center().y), p.text);
     }
     resp
+}
+
+/// A menu item that cannot be used: muted, with a tooltip that says why.
+pub fn menu_item_disabled(ui: &mut Ui, label: &str, icon: Option<IconFn>, tip: &str, p: &Pal) {
+    let w = ui.available_width().max(200.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::hover());
+    let resp = resp.on_hover_cursor(CursorIcon::NotAllowed);
+    let painter = ui.painter();
+    let mut x = rect.left() + 8.0;
+    if let Some(icon) = icon {
+        icon(painter, pos2(x + 8.0, rect.center().y), p.muted);
+        x += 24.0;
+    }
+    let clip = Rect::from_min_max(pos2(x, rect.top()), pos2(rect.right() - 8.0, rect.bottom()));
+    painter.with_clip_rect(clip).text(pos2(x, rect.center().y), Align2::LEFT_CENTER, label, theme::reg(14.0), p.muted);
+    resp.on_hover_text(tip);
 }
 
 pub fn menu_separator(ui: &mut Ui, p: &Pal) {

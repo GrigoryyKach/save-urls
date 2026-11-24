@@ -74,9 +74,17 @@ The link is found in any copied text: "look: https://...", `www.site.com`, or ju
 ## What the window does
 
 - **Folders** with your own names: "+" in the sidebar, double-click to rename, right-click to rename,
-  reorder, make a folder the default or delete it (links are not deleted, they move to "No folder").
-- **Drag and drop**: drag a link card onto a folder. Drag a folder row up or down to reorder the folders: an accent line shows where it will land,
-  Esc or releasing outside the list cancels, and long lists scroll near the edges. The context-menu "Move up / Move down" items stay.
+  add a subfolder, reorder, move, make a folder the default or delete it (links are not deleted, they move to "No folder").
+- **Nested folders**, up to 5 levels (a top-level folder is level 1). The sidebar is a tree: each level is indented, a chevron opens and closes a folder
+  (the state is remembered), and long names are cut with an ellipsis. Right-click a folder: "New subfolder" (disabled at level 5), "Move up / Move down"
+  among its siblings and "Move to..." with the valid targets and "Top level". A folder shows its own links plus those of its subfolders, and its counter
+  adds them up; a nested folder shows a breadcrumb (`Parent › Child`) under its name. Deleting a folder deletes its subfolders too; the dialog says how many
+  there are, and every link of them stays in the library under "No folder". "All links" and the search include the links of nested folders.
+- **Drag and drop**: drag a link card onto a folder, nested ones included. Drag a folder row to reorder it or to move it: an accent line at the level it will
+  land on means "between these rows", a highlighted row means "inside this folder" (the middle third of the row), and hovering a collapsed folder for
+  about 0.6 s opens it. Drop between top-level rows or below the last row to make a nested folder top-level; its subfolders come with it. Not allowed
+  (no indicator, nothing happens on release): onto itself or its own subfolders, or anywhere that would push the deepest subfolder below level 5.
+  Esc or releasing outside the list cancels, and long lists scroll near the edges.
 - **Link**: a title, an optional description and a folder. Clicking the card opens the link in the browser;
   on hover there are "open", "copy", "edit" and "delete" buttons, and the right-click menu offers the same plus "Move to...".
   Deleting can be undone with the "Undo" button.
@@ -96,7 +104,9 @@ Window shortcuts: Ctrl+V saves the link from the clipboard, Ctrl+N adds a link, 
 ## Where the library is stored
 
 `%APPDATA%\Save URLs\library.json` on Windows, `~/.config/Save URLs/library.json` on Linux: links, folders and settings (including language and theme). Writes are atomic (through a temporary file),
-and once per run the previous version is copied to `library.bak.json`. If the file turns out to be damaged, the program does not overwrite it
+and once per run the previous version is copied to `library.bak.json`. Library format 2 (1.7.0) adds a `parent` and an `expanded` flag to every folder;
+a library from an older version is upgraded on first start: every folder becomes a top-level folder in the same order, and the old file is kept as
+`library.json.bak-1` before anything is written. If the file turns out to be damaged, the program does not overwrite it
 but sets it aside as `library.broken-<time>.json` and says so.
 
 **Portable mode**: if `library.json` lies next to the executable, the program works with it (handy for a USB stick).

@@ -40,6 +40,10 @@ pub struct S {
     pub save_here: &'static str,
     pub move_up: &'static str,
     pub move_down: &'static str,
+    pub new_subfolder: &'static str,
+    pub max_depth_tip: &'static str,
+    pub move_folder_to: &'static str,
+    pub top_level: &'static str,
     pub delete_folder: &'static str,
     pub settings: &'static str,
     pub update_available: &'static str,
@@ -131,6 +135,7 @@ pub struct S {
     pub delete_folder_q: &'static str,
     pub folder_is_empty: &'static str,
     pub links_move_out: &'static str,
+    pub subfolders_deleted: &'static str,
 
     // Toasts and dialogs
     pub saved_in: &'static str,
@@ -178,6 +183,10 @@ const EN: S = S {
     save_here: "Save new links here",
     move_up: "Move up",
     move_down: "Move down",
+    new_subfolder: "New subfolder",
+    max_depth_tip: "Maximum nesting depth is 5",
+    move_folder_to: "Move \"{name}\" to",
+    top_level: "Top level",
     delete_folder: "Delete folder",
     settings: "Settings",
     update_available: "Version {v} available",
@@ -264,6 +273,7 @@ const EN: S = S {
     delete_folder_q: "Delete folder \"{name}\"?",
     folder_is_empty: "The folder is empty",
     links_move_out: "{links} will stay in the library and move to \"No folder\"",
+    subfolders_deleted: "{subs} inside will be deleted too",
 
     saved_in: "Link saved to \"{place}\"",
     already_in: "This link is already in the library",
@@ -309,6 +319,10 @@ const RU: S = S {
     save_here: "Сохранять сюда новые ссылки",
     move_up: "Переместить выше",
     move_down: "Переместить ниже",
+    new_subfolder: "Новая вложенная папка",
+    max_depth_tip: "Максимальная вложенность — 5 уровней",
+    move_folder_to: "Переместить «{name}» в",
+    top_level: "Верхний уровень",
     delete_folder: "Удалить папку",
     settings: "Настройки",
     update_available: "Доступна версия {v}",
@@ -395,6 +409,7 @@ const RU: S = S {
     delete_folder_q: "Удалить папку «{name}»?",
     folder_is_empty: "Папка пустая",
     links_move_out: "{links} останутся в библиотеке и переместятся в «Без папки»",
+    subfolders_deleted: "Вложенные папки ({subs}) тоже будут удалены",
 
     saved_in: "Ссылка сохранена в «{place}»",
     already_in: "Эта ссылка уже есть в библиотеке",
@@ -440,6 +455,10 @@ const UK: S = S {
     save_here: "Зберігати сюди нові посилання",
     move_up: "Перемістити вище",
     move_down: "Перемістити нижче",
+    new_subfolder: "Нова вкладена тека",
+    max_depth_tip: "Максимальна вкладеність — 5 рівнів",
+    move_folder_to: "Перемістити «{name}» до",
+    top_level: "Верхній рівень",
     delete_folder: "Видалити теку",
     settings: "Налаштування",
     update_available: "Доступна версія {v}",
@@ -526,6 +545,7 @@ const UK: S = S {
     delete_folder_q: "Видалити теку «{name}»?",
     folder_is_empty: "Тека порожня",
     links_move_out: "{links} залишаться в бібліотеці й перемістяться до «Без теки»",
+    subfolders_deleted: "Вкладені теки ({subs}) також буде видалено",
 
     saved_in: "Посилання збережено в «{place}»",
     already_in: "Це посилання вже є в бібліотеці",
@@ -582,6 +602,7 @@ mod tests {
             assert!(t.found.contains("{n}") && t.found.contains("{total}"));
             assert!(t.err_duplicate.contains("{t}") && t.deleted.contains("{t}"));
             assert!(t.delete_folder_q.contains("{name}") && t.saved_in.contains("{place}"));
+            assert!(t.subfolders_deleted.contains("{subs}") && t.move_folder_to.contains("{name}"));
             assert!(t.links_move_out.contains("{links}") && t.tip_click.contains("{u}"));
             assert!(t.library_broken.contains("{e}") && t.library_broken.contains("{name}"));
             assert!(t.update_available.contains("{v}"));
